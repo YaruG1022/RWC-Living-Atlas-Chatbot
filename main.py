@@ -21,6 +21,7 @@ app = FastAPI(title="RWC Living Atlas Helper Chatbot")
 # Mirrors the Living Atlas backend CORS list; override with ALLOWED_ORIGINS.
 _DEFAULT_ORIGINS = ",".join([
     "http://localhost:3000",
+    "https://rwc-living-atlas.netlify.app",
     "https://verdant-smakager-ef450d.netlify.app",
     "https://willowy-twilight-157839.netlify.app",
 ])
