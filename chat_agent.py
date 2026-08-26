@@ -72,6 +72,9 @@ class ArcGISServiceCatalogSkill(BaseSkill):
             "what", "which", "show", "list", "about", "with", "from", "that",
             "arcgis", "service", "services", "layer", "layers", "folder", "rest",
             "the", "and", "for", "are", "can", "you", "this", "have", "any",
+            "is", "in", "on", "at", "of", "to", "an", "it", "as", "by", "or",
+            "if", "be", "do", "we", "us", "my", "me", "so", "no", "up",
+            "there", "how", "where", "when", "does", "find", "under",
         }
         terms = []
         for word in words:
@@ -80,6 +83,14 @@ class ArcGISServiceCatalogSkill(BaseSkill):
             if len(terms) >= 6:
                 break
         return terms
+
+    @staticmethod
+    def _term_matches(term: str, text: str) -> bool:
+        # Short tokens (e.g. "wq", "aq") match whole words only, so a stray
+        # "is" or "wa" never substring-matches names like "GIS" or "Water".
+        if len(term) <= 2:
+            return re.search(rf"\b{re.escape(term)}\b", text) is not None
+        return term in text
 
     def _base_url(self) -> str:
         return os.environ.get(
@@ -168,7 +179,7 @@ class ArcGISServiceCatalogSkill(BaseSkill):
                 or f"in {f_lower}" in lowered
                 or f"under {f_lower}" in lowered
             )
-            by_term = terms and any(term in f_lower for term in terms)
+            by_term = terms and any(self._term_matches(term, f_lower) for term in terms)
             if explicit or by_term:
                 folder_targets.append(str(folder))
 
@@ -232,14 +243,14 @@ class ArcGISServiceCatalogSkill(BaseSkill):
             if terms:
                 for folder in folders:
                     folder_text = str(folder).lower()
-                    if any(term in folder_text for term in terms):
+                    if any(self._term_matches(term, folder_text) for term in terms):
                         matched_folders.append(str(folder))
 
                 for svc in services:
                     name = str((svc or {}).get("name", ""))
                     svc_type = str((svc or {}).get("type", ""))
                     target = f"{name} {svc_type}".lower()
-                    if any(term in target for term in terms):
+                    if any(self._term_matches(term, target) for term in terms):
                         matched_services.append((name, svc_type))
             else:
                 matched_folders = [str(f) for f in folders[:8]]
@@ -271,7 +282,7 @@ class ArcGISServiceCatalogSkill(BaseSkill):
                         name = str(svc.get("name", ""))
                         svc_type = str(svc.get("type", ""))
                         target = f"{name} {svc_type}".lower()
-                        if not terms or any(term in target for term in terms):
+                        if not terms or any(self._term_matches(term, target) for term in terms):
                             matched_folder_services.append((name, svc_type))
 
                     preview = matched_folder_services[:10]

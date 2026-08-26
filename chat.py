@@ -217,10 +217,24 @@ def ask(payload: ChatRequest):
         response = client.chat.completions.create(
             model=model,
             messages=messages,
-            max_tokens=600,
+            max_tokens=2500,
             temperature=0.4,
+            # deepseek-v4-flash defaults to thinking mode, whose hidden
+            # reasoning tokens count toward max_tokens — long reasoning can
+            # truncate the visible answer or leave it empty entirely, and it
+            # roughly doubles response latency. This chatbot's answers are
+            # grounded in the provided context, so thinking adds no value.
+            extra_body={"thinking": {"type": "disabled"}},
         )
-        answer = response.choices[0].message.content.strip()
+        answer = (response.choices[0].message.content or "").strip()
+        if not answer:
+            print(
+                "[chat] Warning: model returned empty content "
+                f"(finish_reason={response.choices[0].finish_reason}); returning fallback."
+            )
+            return ChatResponse(
+                answer="Sorry — I couldn't finish generating an answer. Please try asking again."
+            )
         if navigation_links:
             link_lines = [
                 "",
