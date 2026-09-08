@@ -76,7 +76,40 @@ Point the frontend's chatbot requests at this service's URL (e.g. via a `REACT_A
 
 ## Keeping the knowledge base in sync
 
-`docs/` describes Living Atlas features. When the main app changes, update the matching doc here and re-run `python scripts/index_docs.py`.
+`docs/` describes Living Atlas features. Two GitHub Actions workflows keep it honest:
+
+- **[`reindex-docs.yml`](.github/workflows/reindex-docs.yml)** — any push to `main` touching `docs/**` or `scripts/index_docs.py` rebuilds the Pinecone index automatically. You no longer need to run the indexer by hand; the *Actions* tab has a manual "Run workflow" button for when you do. Runs are serialised (`concurrency: pinecone-index`) and never cancelled mid-flight, because the script clears the index before upserting and a half-finished run would leave it empty.
+- **[`docs-drift-alert.yml`](.github/workflows/docs-drift-alert.yml)** — the main app repo pings this repo when its user-facing documentation changes, and this opens (or comments on) an issue labelled `docs-drift` asking someone to check `docs/` for drift.
+
+### Why the drift alert is a nudge rather than a sync
+
+The obvious idea is to index the main repo's docs directly and delete the copies here. It does not work in this codebase:
+
+- That repo's `documentation/` folder holds project deliverables — sprint reports, client meeting notes, final report PDFs. It is not a description of how the app behaves, and indexing it would fill the chatbot's knowledge base with course paperwork.
+- The real user-facing documentation lives in `client/src/UserManual.js`: 240 KB of React, with the prose interleaved with icons, styling, and interactive demos. Any extractor would be guessing at what is content and what is chrome, and would break on the next refactor.
+
+So the duplication stays, and CI makes it visible instead of silent: when the manual changes, an issue appears here. If the user manual is ever moved into Markdown, indexing it directly becomes worth revisiting.
+
+### One-time setup
+
+In **this** repo, under *Settings → Secrets and variables → Actions*:
+
+| Kind | Name | Value |
+|------|------|-------|
+| Secret | `PINECONE_API_KEY` | Your Pinecone API key |
+| Variable *(optional)* | `PINECONE_INDEX` | Index name, if not `living-atlas-docs-hosted` |
+| Variable *(optional)* | `PINECONE_EMBED_MODEL` | Hosted model, if not `multilingual-e5-large` |
+
+In the **main Living Atlas** repo, for the drift alert:
+
+| Kind | Name | Value |
+|------|------|-------|
+| Secret | `CHATBOT_DISPATCH_TOKEN` | A fine-grained PAT scoped to *this repo only*, with **Contents: read and write** |
+| Variable | `CHATBOT_REPO` | `YaruG1022/RWC-Living-Atlas-Chatbot` |
+
+`Contents: write` is what GitHub's `POST /repos/{owner}/{repo}/dispatches` endpoint requires — it is the documented permission for sending a `repository_dispatch`, not a sign the token edits files. Scope the token to this one repository so that is all it can reach. The issue itself is filed by this repo's own `GITHUB_TOKEN`, so the PAT needs no issue permissions.
+
+If either the secret or the variable is missing, the notifier logs a warning and skips, rather than failing the main app's build.
 
 ### What belongs in `docs/` and what does not
 

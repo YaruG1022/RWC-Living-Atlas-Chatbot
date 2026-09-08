@@ -1,0 +1,91 @@
+name: Docs drift alert
+
+# Fired by the main Living Atlas repo when its user-facing documentation
+# changes. docs/ here describes that app, and nothing keeps the two in step
+# automatically, so this opens (or updates) an issue asking a human to check.
+#
+# It does not re-run the indexer: nothing in docs/ has changed yet. Editing
+# docs/ is what triggers reindex-docs.yml.
+
+on:
+  repository_dispatch:
+    types: [atlas-docs-changed]
+
+permissions:
+  issues: write
+
+concurrency:
+  group: docs-drift-alert
+  cancel-in-progress: false
+
+jobs:
+  alert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Open or update the drift issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          # Everything below is text written in another repo. It is passed
+          # through the environment and only ever used as data, never as part
+          # of the script itself.
+          SRC_SHA: ${{ github.event.client_payload.sha }}
+          SRC_MESSAGE: ${{ github.event.client_payload.message }}
+          SRC_URL: ${{ github.event.client_payload.url }}
+          SRC_AUTHOR: ${{ github.event.client_payload.author }}
+          SRC_FILES: ${{ github.event.client_payload.files }}
+        run: |
+          set -euo pipefail
+
+          sha="${SRC_SHA:-}"
+          short_sha="${sha:0:7}"
+          # Keep the quoted commit subject to one line so a crafted multi-line
+          # message cannot fake extra structure in the issue body.
+          subject="$(printf '%s' "${SRC_MESSAGE:-(no message)}" | head -n 1)"
+
+          # Heredoc body is unindented on purpose: <<EOF keeps leading spaces,
+          # and indented lines would render as code blocks in the issue.
+          body="$(cat <<EOF
+          The main Living Atlas repo changed its user-facing documentation. The knowledge base in \`docs/\` may now describe the app inaccurately.
+
+          **Commit:** ${SRC_URL:-$short_sha}
+          **Author:** ${SRC_AUTHOR:-unknown}
+          **Subject:** ${subject}
+
+          **Files changed:**
+          \`\`\`
+          ${SRC_FILES:-(unknown)}
+          \`\`\`
+
+          ### What to do
+          1. Read the commit and decide whether any behaviour described in \`docs/\` changed.
+          2. Update the affected \`docs/features_*.md\` file, keeping to the rule in the README: stable explanations belong in \`docs/\`, counts and enumerable lists come from the backend's \`/atlas/summary\` endpoints instead.
+          3. Merging that change to \`main\` re-runs the indexer automatically.
+          4. Close this issue once \`docs/\` is accurate again.
+          EOF
+          )"
+          # Strip the YAML block indentation the heredoc preserved.
+          body="$(printf '%s\n' "$body" | sed 's/^          //')"
+
+          existing="$(gh issue list --repo "$REPO" --label docs-drift --state open \
+                        --limit 1 --json number --jq '.[0].number // empty')"
+
+          # The label must exist before it can be applied.
+          gh label create docs-drift \
+            --repo "$REPO" \
+            --color D93F0B \
+            --description "docs/ may be out of step with the main Living Atlas app" \
+            2>/dev/null || true
+
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$REPO" --body "$body"
+            echo "Commented on existing issue #${existing}." >> "$GITHUB_STEP_SUMMARY"
+          else
+            url="$(gh issue create --repo "$REPO" \
+                     --title "Review docs/ against main app changes" \
+                     --label docs-drift \
+                     --body "$body")"
+            echo "Opened ${url}." >> "$GITHUB_STEP_SUMMARY"
+          fi
