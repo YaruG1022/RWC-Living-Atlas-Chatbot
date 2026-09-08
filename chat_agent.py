@@ -1,8 +1,10 @@
 """
-chat_agent.py — lightweight agent framework for chatbot skills.
+chat_agent.py — lightweight framework for chatbot skills.
 
-This module adds a simple, extensible agent layer that can run skills/tools
-before LLM generation and inject live context into the system prompt.
+A skill is a live lookup against an external system. Skills are exposed to the
+model as callable tools (see chat_tools.py), so this module no longer decides
+*whether* a skill is relevant — it only knows how to run one. The keyword
+trigger lists that used to make that decision are gone; the model makes it.
 """
 
 import os
@@ -24,17 +26,8 @@ class SkillResult:
     navigation_links: Optional[List[dict]] = None
 
 
-@dataclass
-class AgentExecutionResult:
-    context: str
-    navigation_links: List[dict]
-
-
 class BaseSkill:
     name = "base-skill"
-
-    def can_handle(self, question: str) -> bool:
-        raise NotImplementedError
 
     def run(self, question: str) -> SkillResult:
         raise NotImplementedError
@@ -50,20 +43,6 @@ class ArcGISServiceCatalogSkill(BaseSkill):
         # endpoint_key -> (timestamp, payload)
         self._cache = {}
         self._resolved_base_url = ""
-
-    def can_handle(self, question: str) -> bool:
-        lowered = question.lower()
-        trigger_words = (
-            "arcgis",
-            "service",
-            "services",
-            "layer",
-            "layers",
-            "folder",
-            "rest",
-            "gis.ecology.wa.gov",
-        )
-        return any(word in lowered for word in trigger_words)
 
     def _extract_terms(self, question: str) -> List[str]:
         # Include 2+ char tokens so short folder names like AQ/WQ/WR are captured.
@@ -388,44 +367,17 @@ class ArcGISServiceCatalogSkill(BaseSkill):
 
 
 class ChatAgent:
-    """Simple orchestrator for running chat skills."""
+    """Registry of skills, runnable by name."""
 
     def __init__(self, skills: List[BaseSkill]) -> None:
-        self.skills = skills
+        self.skills = {skill.name: skill for skill in skills}
 
-    def build_skill_context(self, question: str) -> AgentExecutionResult:
-        blocks = []
-        warnings = []
-        navigation_links = []
-
-        for skill in self.skills:
-            if not skill.can_handle(question):
-                continue
-            result = skill.run(question)
-            if result.context_block:
-                blocks.append(f"=== SKILL: {result.skill_name} ===\n{result.context_block}")
-            if result.warning:
-                warnings.append(f"[{result.skill_name}] {result.warning}")
-            if result.navigation_links:
-                navigation_links.extend(result.navigation_links)
-
-        if warnings:
-            print("[chat-agent] warnings:", " | ".join(warnings))
-            blocks.append(
-                "=== SKILL WARNINGS ===\n"
-                + "\n".join(f"- {warning}" for warning in warnings)
-                + "\n- If a live skill warning exists, do NOT claim live catalog data was retrieved."
-            )
-
-        deduped = []
-        seen = set()
-        for link in navigation_links:
-            key = link.get("url")
-            if key and key not in seen:
-                deduped.append(link)
-                seen.add(key)
-
-        return AgentExecutionResult(context="\n\n".join(blocks), navigation_links=deduped[:8])
+    def run_skill(self, name: str, query: str) -> Optional[SkillResult]:
+        """Run one skill. Returns None if no skill goes by that name."""
+        skill = self.skills.get(name)
+        if skill is None:
+            return None
+        return skill.run(query)
 
 
 def build_default_chat_agent() -> ChatAgent:

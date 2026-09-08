@@ -1,32 +1,45 @@
 """
 chat.py  —  /chat/ask endpoint
 
-Docs retrieval: Pinecone with hosted (integrated inference) embeddings — the
-query text is embedded server-side by the model attached to the index.
-Card data:      fetched over HTTP from the Living Atlas backend's
-                /cards/summary endpoint (optional, enabled by ATLAS_API_URL).
-Atlas facts:    counts, card taxonomy, and the ArcGIS folder inventory, fetched
-                from the backend's /atlas/summary endpoint. These change over
-                time, so they live in the database rather than in docs/*.md.
-Agent skills:   live ArcGIS catalog lookups + navigation links (chat_agent.py).
-Generation:     DeepSeek API (OpenAI-compatible), set DEEPSEEK_API.
+The model answers by calling tools (chat_tools.py) rather than being handed
+everything up front:
+
+  search_documentation   Pinecone vector search over docs/*.md
+  search_cards           live public card records from the Atlas backend
+  browse_arcgis_catalog  live state ArcGIS REST catalog + quick-action links
+
+Two blocks are still injected unconditionally, because they are small and the
+model cannot know it needs them: a first-pass documentation search on the raw
+question (grounding, so an answer is never ungrounded even if no tool is
+called), and the live Atlas fact block (counts and vocabulary — the only thing
+stopping the model guessing at numbers).
+
+Generation: DeepSeek API (OpenAI-compatible), set DEEPSEEK_API.
 """
 
+import json
 import os
-import time
 from typing import Any
 
-import requests
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from openai import APIConnectionError, APITimeoutError, OpenAI
 
-from chat_agent import build_default_chat_agent
+from chat_tools import (
+    ToolContext,
+    execute_tool,
+    gather_all_context,
+    get_atlas_facts,
+    search_documentation,
+    tool_schemas,
+)
 
 chat_router = APIRouter(prefix="/chat", tags=["chat"])
 
-NAMESPACE = "__default__"
-_CHAT_AGENT = build_default_chat_agent()
+# How many times the model may call tools before it must answer. Three covers
+# the deepest realistic chain (look up a folder, then a service inside it, then
+# check the docs for what it means) without letting a confused model loop.
+MAX_TOOL_ROUNDS = 3
 
 # ---------------------------------------------------------------------------
 # System prompt: gives the model context about the Living Atlas project
@@ -36,24 +49,28 @@ Regional Water Center (RWC) Living Atlas web application — an interactive map
 that showcases environmental datasets, GIS layers, and research resources for
 the Pacific Northwest (Idaho, Oregon, and Washington).
 
-Answer the user's question using the reference documentation, live card data, and skill outputs provided below.
-If the documentation does not cover the question, say so honestly — do not invent information.
 Be concise, friendly, and factual.
 Do not answer questions unrelated to the Living Atlas or environmental/GIS topics.
 
-For ArcGIS folder/service/layer questions, prioritize LIVE SKILL OUTPUTS over static docs when available.
-If LIVE SKILL OUTPUTS contain ArcGIS catalog entries, do not respond with "docs do not contain this".
+TOOLS: You have tools for searching the documentation, the live card database, and the
+live ArcGIS catalog. Call them whenever the answer depends on information you were not
+already given — do not guess, and do not answer from memory about what the Atlas
+contains. Call a tool even when the question is not in English; pass English keywords
+as the query and answer in the user's own language. If a tool reports that a service is
+unreachable, say so plainly rather than inventing an answer.
+
+If, after using the tools, you still cannot answer, say so honestly.
 
 For any countable or enumerable fact — how many cards or ArcGIS services exist, which
-categories or tags are available, which folders a state publishes — use LIVE ATLAS FACTS.
-The reference documentation deliberately omits these numbers and lists because they change
-as the Atlas grows; never estimate them from the documentation.
+categories or tags are available, which folders a state publishes — use LIVE ATLAS FACTS
+below. The reference documentation deliberately omits these numbers and lists because
+they change as the Atlas grows; never estimate them from the documentation.
 
-When live skill outputs are relevant to the answer, append a final section titled exactly:
+When you used the live ArcGIS catalog, append a final section titled exactly:
 Sources
 Then include 1-4 bullet points in this format:
 - [ArcGIS live catalog] <source snippet>
-Use the provided structured source snippets when available.
+Use the structured source snippets the tool returned.
 
 PRIVACY (strict): The card data you receive contains only public, non-sensitive fields.
 It never includes usernames, emails, passwords, or any account/identity information.
@@ -67,136 +84,6 @@ identities and account data are private and not accessible to this assistant.
 
 
 # ---------------------------------------------------------------------------
-# Pinecone retrieval (hosted embeddings — text in, matches out)
-# ---------------------------------------------------------------------------
-def get_pinecone_index():
-    """Return a Pinecone Index object. Raises RuntimeError if not configured."""
-    api_key = os.environ.get("PINECONE_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("PINECONE_API_KEY environment variable is not set.")
-
-    index_name = os.environ.get("PINECONE_INDEX", "living-atlas-docs-hosted")
-
-    from pinecone import Pinecone
-
-    pc = Pinecone(api_key=api_key)
-    return pc.Index(index_name)
-
-
-def get_relevant_docs(question: str, top_k: int = 3) -> str:
-    """Query Pinecone for the top-k most relevant chunks. Fails silently."""
-    try:
-        index = get_pinecone_index()
-
-        result = index.search(
-            namespace=NAMESPACE,
-            top_k=top_k,
-            inputs={"text": question},
-        )
-
-        hits = result["result"]["hits"]
-        if not hits:
-            return ""
-
-        chunks = [
-            hit["fields"]["content"]
-            for hit in hits
-            if hit.get("fields", {}).get("content")
-        ]
-        return "\n\n---\n\n".join(chunks)
-
-    except Exception as exc:
-        print(f"[chat] Retrieval warning: {exc}")
-        return ""
-
-
-# ---------------------------------------------------------------------------
-# Live card data (non-sensitive, optional)
-# ---------------------------------------------------------------------------
-# Lets the assistant answer questions about the cards currently in the Living
-# Atlas database. The card summary is fetched over HTTP from the main
-# backend's /cards/summary endpoint, which returns public, non-sensitive card
-# data only — this service never talks to the database directly. Enabled by
-# setting ATLAS_API_URL; when unset, card questions gracefully fall back to
-# docs-only answers.
-# ---------------------------------------------------------------------------
-_CARD_QUERY_KEYWORDS = (
-    "card", "cards", "dataset", "datasets", "data point", "datapoint",
-    "marker", "markers", "pin", "pins", "monitoring", "station", "stations",
-    "how many", "count", "list", "show me", "what data", "which data",
-    "uploaded", "contributed", "category", "categories", "tag", "tags",
-    "river", "watershed", "places", "water quality", "organization",
-)
-
-def _looks_like_card_question(question: str) -> bool:
-    lowered = question.lower()
-    return any(keyword in lowered for keyword in _CARD_QUERY_KEYWORDS)
-
-
-def get_card_context(question: str) -> str:
-    """Fetch the card-context block from the Living Atlas backend. Fail silently."""
-    if not _looks_like_card_question(question):
-        return ""
-
-    base = os.environ.get("ATLAS_API_URL", "").strip().rstrip("/")
-    if not base:
-        return ""
-
-    try:
-        resp = requests.get(
-            f"{base}/cards/summary",
-            params={"q": question},
-            timeout=8,
-        )
-        resp.raise_for_status()
-        context = resp.json().get("context", "")
-        return context if isinstance(context, str) else ""
-    except Exception as exc:
-        print(f"[chat] Card context warning: {exc}")
-        return ""
-
-
-# ---------------------------------------------------------------------------
-# Live Atlas facts (counts, taxonomy, ArcGIS inventory)
-# ---------------------------------------------------------------------------
-# Facts that change as the Atlas grows — how many public cards exist, which
-# categories and tags are defined, how many ArcGIS services and folders each
-# state publishes. They deliberately do NOT live in docs/*.md, which would go
-# stale the moment someone adds a card or a layer. The block is small and
-# applies to a wide range of questions, so it is fetched for every question
-# rather than gated behind keywords, and cached locally to keep that free.
-# ---------------------------------------------------------------------------
-_ATLAS_FACTS_TTL_SECONDS = 120
-_atlas_facts_cache: tuple[float, str] | None = None
-
-
-def get_atlas_facts() -> str:
-    """Fetch the live Atlas fact block from the backend. Fail silently."""
-    global _atlas_facts_cache
-
-    base = os.environ.get("ATLAS_API_URL", "").strip().rstrip("/")
-    if not base:
-        return ""
-
-    now = time.time()
-    if _atlas_facts_cache and now - _atlas_facts_cache[0] < _ATLAS_FACTS_TTL_SECONDS:
-        return _atlas_facts_cache[1]
-
-    try:
-        resp = requests.get(f"{base}/atlas/summary", timeout=8)
-        resp.raise_for_status()
-        context = resp.json().get("context", "")
-        if not isinstance(context, str):
-            return ""
-        _atlas_facts_cache = (now, context)
-        return context
-    except Exception as exc:
-        print(f"[chat] Atlas facts warning: {exc}")
-        # Serve a stale block rather than nothing if we ever had one.
-        return _atlas_facts_cache[1] if _atlas_facts_cache else ""
-
-
-# ---------------------------------------------------------------------------
 # Request / response schemas
 # ---------------------------------------------------------------------------
 class ChatRequest(BaseModel):
@@ -206,6 +93,128 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     answer: str
+
+
+# ---------------------------------------------------------------------------
+# Prompt assembly
+# ---------------------------------------------------------------------------
+def build_system_prompt(question: str) -> str:
+    """Base prompt plus the two unconditionally-injected context blocks."""
+    sections = []
+
+    doc_context = search_documentation(question)
+    if doc_context:
+        sections.append("=== REFERENCE DOCUMENTATION (first-pass search) ===\n" + doc_context)
+
+    atlas_facts = get_atlas_facts()
+    if atlas_facts:
+        sections.append("=== LIVE ATLAS FACTS ===\n" + atlas_facts)
+
+    if not sections:
+        return SYSTEM_PROMPT_BASE
+    return SYSTEM_PROMPT_BASE + "\n\n" + "\n\n".join(sections)
+
+
+def build_messages(payload: ChatRequest, question: str) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": build_system_prompt(question)}
+    ]
+
+    for msg in payload.history[-6:]:
+        role = msg.get("role") if isinstance(msg, dict) else None
+        text = msg.get("text") if isinstance(msg, dict) else None
+        if role in {"user", "assistant"} and isinstance(text, str) and text.strip():
+            messages.append({"role": role, "content": text})
+
+    messages.append({"role": "user", "content": question})
+    return messages
+
+
+def append_navigation_links(answer: str, navigation_links: list[dict]) -> str:
+    if not navigation_links:
+        return answer
+
+    link_lines = ["", "Quick actions in Upload Panel:"]
+    for link in navigation_links[:5]:
+        title = link.get("title", "Open in Upload Panel")
+        url = link.get("url", "")
+        if title and url:
+            link_lines.append(f"- [{title}]({url})")
+    return answer + "\n" + "\n".join(link_lines)
+
+
+# ---------------------------------------------------------------------------
+# Tool-calling loop
+# ---------------------------------------------------------------------------
+def _completion(client: OpenAI, model: str, messages: list, with_tools: bool):
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": 2500,
+        "temperature": 0.4,
+        # deepseek-v4-flash defaults to thinking mode, whose hidden reasoning
+        # tokens count toward max_tokens — long reasoning can truncate the
+        # visible answer or leave it empty entirely, and it roughly doubles
+        # response latency. Answers here are grounded in retrieved context, so
+        # thinking adds no value.
+        "extra_body": {"thinking": {"type": "disabled"}},
+    }
+    if with_tools:
+        kwargs["tools"] = tool_schemas()
+        kwargs["tool_choice"] = "auto"
+    return client.chat.completions.create(**kwargs)
+
+
+def _parse_tool_args(raw: str | None) -> dict[str, Any]:
+    """Tool arguments arrive as a JSON string the model wrote; it can be junk."""
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except json.JSONDecodeError:
+        print(f"[chat] Ignoring malformed tool arguments: {raw[:200]}")
+        return {}
+
+
+def run_tool_loop(client: OpenAI, model: str, messages: list, ctx: ToolContext):
+    """Let the model call tools until it produces an answer.
+
+    Returns the final completion. Tools are withdrawn on the last round so the
+    model has no choice but to answer with what it has gathered.
+    """
+    for round_index in range(MAX_TOOL_ROUNDS):
+        response = _completion(client, model, messages, with_tools=True)
+        message = response.choices[0].message
+
+        tool_calls = getattr(message, "tool_calls", None)
+        if not tool_calls:
+            return response
+
+        messages.append(message.model_dump(exclude_none=True))
+
+        for call in tool_calls:
+            name = call.function.name
+            args = _parse_tool_args(call.function.arguments)
+            print(f"[chat] round {round_index + 1}: {name}({args})")
+            messages.append({
+                "role": "tool",
+                "tool_call_id": call.id,
+                "content": execute_tool(name, args, ctx),
+            })
+
+    # Budget spent and the model still wants tools — make it answer.
+    print(f"[chat] Tool budget of {MAX_TOOL_ROUNDS} rounds exhausted; forcing an answer.")
+    return _completion(client, model, messages, with_tools=False)
+
+
+def _looks_like_missing_tool_support(exc: Exception) -> bool:
+    """Whether an error suggests the configured model cannot do tool calling."""
+    status = getattr(exc, "status_code", None)
+    if status not in {400, 404, 422}:
+        return False
+    lowered = str(exc).lower()
+    return "tool" in lowered or "function" in lowered
 
 
 # ---------------------------------------------------------------------------
@@ -228,56 +237,29 @@ def ask(payload: ChatRequest):
         # Env vars sometimes include trailing newline/space from copy-paste.
         print("[chat] Warning: DEEPSEEK_API contained leading/trailing whitespace; sanitized automatically.")
 
-    doc_context = get_relevant_docs(question)
-    atlas_facts = get_atlas_facts()
-    card_context = get_card_context(question)
-    agent_result = _CHAT_AGENT.build_skill_context(question)
-    skill_context = agent_result.context
-    navigation_links = agent_result.navigation_links
-
-    context_sections = []
-    if doc_context:
-        context_sections.append("=== REFERENCE DOCUMENTATION ===\n" + doc_context)
-    if atlas_facts:
-        context_sections.append("=== LIVE ATLAS FACTS ===\n" + atlas_facts)
-    if card_context:
-        context_sections.append(
-            "=== LIVE CARD DATA (PUBLIC, NON-SENSITIVE) ===\n" + card_context
-        )
-    if skill_context:
-        context_sections.append("=== LIVE SKILL OUTPUTS ===\n" + skill_context)
-
-    if context_sections:
-        system_prompt = SYSTEM_PROMPT_BASE + "\n\n" + "\n\n".join(context_sections)
-    else:
-        system_prompt = SYSTEM_PROMPT_BASE
-
     client = OpenAI(base_url="https://api.deepseek.com", api_key=api_key)
     model = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 
-    messages = [{"role": "system", "content": system_prompt}]
-
-    for msg in payload.history[-6:]:
-        role = msg.get("role") if isinstance(msg, dict) else None
-        text = msg.get("text") if isinstance(msg, dict) else None
-        if role in {"user", "assistant"} and isinstance(text, str) and text.strip():
-            messages.append({"role": role, "content": text})
-
-    messages.append({"role": "user", "content": question})
+    ctx = ToolContext()
+    messages = build_messages(payload, question)
 
     try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_tokens=2500,
-            temperature=0.4,
-            # deepseek-v4-flash defaults to thinking mode, whose hidden
-            # reasoning tokens count toward max_tokens — long reasoning can
-            # truncate the visible answer or leave it empty entirely, and it
-            # roughly doubles response latency. This chatbot's answers are
-            # grounded in the provided context, so thinking adds no value.
-            extra_body={"thinking": {"type": "disabled"}},
-        )
+        try:
+            response = run_tool_loop(client, model, messages, ctx)
+        except Exception as exc:
+            if not _looks_like_missing_tool_support(exc):
+                raise
+            # The configured model cannot call tools. Rather than fail, gather
+            # every tool's output up front and answer in one shot, so swapping
+            # DEEPSEEK_MODEL can never take the chatbot down.
+            print(f"[chat] Model '{model}' rejected tools ({exc}); falling back to eager context.")
+            fallback = build_messages(payload, question)
+            fallback[0]["content"] += (
+                "\n\n=== PRE-GATHERED CONTEXT (tools unavailable) ===\n"
+                + gather_all_context(question, ctx)
+            )
+            response = _completion(client, model, fallback, with_tools=False)
+
         answer = (response.choices[0].message.content or "").strip()
         if not answer:
             print(
@@ -287,18 +269,10 @@ def ask(payload: ChatRequest):
             return ChatResponse(
                 answer="Sorry — I couldn't finish generating an answer. Please try asking again."
             )
-        if navigation_links:
-            link_lines = [
-                "",
-                "Quick actions in Upload Panel:",
-            ]
-            for link in navigation_links[:5]:
-                title = link.get("title", "Open in Upload Panel")
-                url = link.get("url", "")
-                if title and url:
-                    link_lines.append(f"- [{title}]({url})")
-            answer = answer + "\n" + "\n".join(link_lines)
-        return ChatResponse(answer=answer)
+        return ChatResponse(answer=append_navigation_links(answer, ctx.navigation_links))
+
+    except HTTPException:
+        raise
     except Exception as e:
         # Print safe diagnostics for server logs (no API key content).
         print(

@@ -95,18 +95,26 @@ Model name, token limits, and provider credentials are supplied by environment v
 
 ## How an Answer Is Assembled
 
-The service is retrieval-grounded, not generation-only. For each question it gathers up to four context blocks and injects them into the system prompt:
+The service is retrieval-grounded, not generation-only, and the assistant chooses its own sources by calling tools.
+
+Two blocks are injected into the system prompt on every question, because the assistant cannot know in advance that it needs them:
 
 | Block | Source | What it provides |
 |-------|--------|------------------|
-| Reference documentation | Pinecone vector search over `docs/*.md` | Stable explanations of how features work |
+| Reference documentation | Pinecone vector search over `docs/*.md`, using the question as written | Stable explanations of how features work |
 | Live Atlas facts | Backend `GET /atlas/summary` | Counts, card categories and tags, ArcGIS folder inventory |
-| Live card data | Backend `GET /cards/summary` | Public, non-sensitive details of matching cards |
-| Live skill outputs | `chat_agent.py` skills | Live ArcGIS REST catalog lookups and navigation links |
 
-The split matters: documentation holds what is *true in general*, while the live blocks hold what is *true right now*. Anything countable or enumerable is served live so it cannot go stale in the docs.
+The assistant may then call any of three tools, in up to three rounds, before answering:
 
-The live blocks require `ATLAS_API_URL` to be set to the Living Atlas backend. When it is unset or the backend is unreachable, those blocks are omitted and the assistant answers from documentation alone rather than failing.
+| Tool | Source | When it is used |
+|------|--------|-----------------|
+| `search_documentation` | Pinecone, with a query the assistant writes | To re-search with better keywords than the raw question — especially when the user asked in another language |
+| `search_cards` | Backend `GET /cards/summary` | When the question is about actual content in the Atlas rather than how the app works |
+| `browse_arcgis_catalog` | Live state ArcGIS REST server | When the question needs what a folder or service contains right now; also produces the Upload Panel quick-action links |
+
+The split matters: documentation holds what is *true in general*, while the live sources hold what is *true right now*. Anything countable or enumerable is served live so it cannot go stale in the docs.
+
+The live sources require `ATLAS_API_URL` to be set to the Living Atlas backend. When it is unset or the backend is unreachable, the tools report that plainly and the assistant answers from documentation alone rather than failing.
 
 ---
 

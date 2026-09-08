@@ -4,23 +4,36 @@ Standalone chatbot microservice for the [RWC Living Atlas](https://github.com/CE
 
 ## Architecture
 
-RAG (retrieval-augmented generation) pipeline:
+Retrieval-augmented generation driven by **tool calling**: the model decides what to look up, rather than the service guessing from keywords.
 
-1. **Retrieval** — the user's question is sent to a [Pinecone](https://www.pinecone.io/) index with hosted embeddings (`multilingual-e5-large`); Pinecone embeds the query server-side and returns the most relevant knowledge-base chunks. No local embedding model required.
-2. **Live context** — three additional context sources are gathered per question:
-   - **Atlas facts** (optional): fetched from the Living Atlas backend's `/atlas/summary` endpoint — public card and ArcGIS counts, the card category and tag vocabulary, and the per-state folder inventory. Fetched for every question and cached for two minutes. Enabled by `ATLAS_API_URL`.
-   - **Card data** (optional): fetched over HTTP from the Living Atlas backend's `/cards/summary` endpoint — public, non-sensitive card records only; this service never talks to the database directly. Enabled by `ATLAS_API_URL`.
-   - **Agent skills**: live ArcGIS REST catalog lookups (`chat_agent.py`) that also produce `atlas-upload://` navigation links the Living Atlas frontend turns into quick actions.
-3. **Generation** — DeepSeek (OpenAI-compatible API) writes the answer from the assembled context.
+**Always injected**, because the model cannot know it needs them:
+
+- **First-pass documentation search** — the raw question goes to a [Pinecone](https://www.pinecone.io/) index with hosted embeddings (`multilingual-e5-large`); Pinecone embeds the query server-side and returns the most relevant knowledge-base chunks. No local embedding model required. This guarantees an answer is never completely ungrounded.
+- **Atlas facts** (needs `ATLAS_API_URL`) — public card and ArcGIS counts, the card category and tag vocabulary, and the per-state folder inventory, from the backend's `/atlas/summary`. Cached two minutes. This is the only thing stopping the model guessing at numbers.
+
+**Tools the model may then call** (`chat_tools.py`), up to `MAX_TOOL_ROUNDS` rounds:
+
+| Tool | What it does |
+|------|--------------|
+| `search_documentation` | Re-searches the docs with a query the model writes — lets it reformulate a vague or non-English question into good English keywords |
+| `search_cards` | Live public card records from the backend's `/cards/summary?force=1` |
+| `browse_arcgis_catalog` | Live state ArcGIS REST catalog via the skill in `chat_agent.py`; also emits the `atlas-upload://` quick-action links the frontend renders |
+
+Generation is DeepSeek (OpenAI-compatible API). If the configured model rejects the `tools` parameter, the service falls back to running every tool eagerly and answering in one shot, so changing `DEEPSEEK_MODEL` cannot take the chatbot down.
 
 ```
 main.py            FastAPI app: CORS, /health, mounts the chat router
-chat.py            /chat/ask endpoint: retrieval + card context + agent + generation
-chat_agent.py      Agent skill framework (ArcGIS live catalog, navigation links)
+chat.py            /chat/ask endpoint: prompt assembly, tool-calling loop, error mapping
+chat_tools.py      Tool registry: schemas the model sees + handlers that run them
+chat_agent.py      Skill framework (ArcGIS live catalog, navigation links)
 docs/              Knowledge base: feature documentation indexed into Pinecone
 scripts/
   index_docs.py    Chunks docs/ and upserts them into the Pinecone index
 ```
+
+### Why tool calling
+
+Relevance used to be decided by hardcoded keyword lists — "does the question contain `card`, `dataset`, or `layer`?" That silently failed on anything phrased differently ("what's in the Atlas about salmon?" matched nothing) and on every question not written in English. The model makes that call far more reliably, so the keyword lists are gone. The same reasoning applies on the backend: `/cards/summary` keeps its keyword heuristic for callers that need a cheap guess, but the tool passes `force=1` to skip it, because the decision has already been made.
 
 ## Setup
 
