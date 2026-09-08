@@ -5,11 +5,15 @@ Docs retrieval: Pinecone with hosted (integrated inference) embeddings — the
 query text is embedded server-side by the model attached to the index.
 Card data:      fetched over HTTP from the Living Atlas backend's
                 /cards/summary endpoint (optional, enabled by ATLAS_API_URL).
+Atlas facts:    counts, card taxonomy, and the ArcGIS folder inventory, fetched
+                from the backend's /atlas/summary endpoint. These change over
+                time, so they live in the database rather than in docs/*.md.
 Agent skills:   live ArcGIS catalog lookups + navigation links (chat_agent.py).
 Generation:     DeepSeek API (OpenAI-compatible), set DEEPSEEK_API.
 """
 
 import os
+import time
 from typing import Any
 
 import requests
@@ -39,6 +43,11 @@ Do not answer questions unrelated to the Living Atlas or environmental/GIS topic
 
 For ArcGIS folder/service/layer questions, prioritize LIVE SKILL OUTPUTS over static docs when available.
 If LIVE SKILL OUTPUTS contain ArcGIS catalog entries, do not respond with "docs do not contain this".
+
+For any countable or enumerable fact — how many cards or ArcGIS services exist, which
+categories or tags are available, which folders a state publishes — use LIVE ATLAS FACTS.
+The reference documentation deliberately omits these numbers and lists because they change
+as the Atlas grows; never estimate them from the documentation.
 
 When live skill outputs are relevant to the answer, append a final section titled exactly:
 Sources
@@ -148,6 +157,46 @@ def get_card_context(question: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Live Atlas facts (counts, taxonomy, ArcGIS inventory)
+# ---------------------------------------------------------------------------
+# Facts that change as the Atlas grows — how many public cards exist, which
+# categories and tags are defined, how many ArcGIS services and folders each
+# state publishes. They deliberately do NOT live in docs/*.md, which would go
+# stale the moment someone adds a card or a layer. The block is small and
+# applies to a wide range of questions, so it is fetched for every question
+# rather than gated behind keywords, and cached locally to keep that free.
+# ---------------------------------------------------------------------------
+_ATLAS_FACTS_TTL_SECONDS = 120
+_atlas_facts_cache: tuple[float, str] | None = None
+
+
+def get_atlas_facts() -> str:
+    """Fetch the live Atlas fact block from the backend. Fail silently."""
+    global _atlas_facts_cache
+
+    base = os.environ.get("ATLAS_API_URL", "").strip().rstrip("/")
+    if not base:
+        return ""
+
+    now = time.time()
+    if _atlas_facts_cache and now - _atlas_facts_cache[0] < _ATLAS_FACTS_TTL_SECONDS:
+        return _atlas_facts_cache[1]
+
+    try:
+        resp = requests.get(f"{base}/atlas/summary", timeout=8)
+        resp.raise_for_status()
+        context = resp.json().get("context", "")
+        if not isinstance(context, str):
+            return ""
+        _atlas_facts_cache = (now, context)
+        return context
+    except Exception as exc:
+        print(f"[chat] Atlas facts warning: {exc}")
+        # Serve a stale block rather than nothing if we ever had one.
+        return _atlas_facts_cache[1] if _atlas_facts_cache else ""
+
+
+# ---------------------------------------------------------------------------
 # Request / response schemas
 # ---------------------------------------------------------------------------
 class ChatRequest(BaseModel):
@@ -180,6 +229,7 @@ def ask(payload: ChatRequest):
         print("[chat] Warning: DEEPSEEK_API contained leading/trailing whitespace; sanitized automatically.")
 
     doc_context = get_relevant_docs(question)
+    atlas_facts = get_atlas_facts()
     card_context = get_card_context(question)
     agent_result = _CHAT_AGENT.build_skill_context(question)
     skill_context = agent_result.context
@@ -188,6 +238,8 @@ def ask(payload: ChatRequest):
     context_sections = []
     if doc_context:
         context_sections.append("=== REFERENCE DOCUMENTATION ===\n" + doc_context)
+    if atlas_facts:
+        context_sections.append("=== LIVE ATLAS FACTS ===\n" + atlas_facts)
     if card_context:
         context_sections.append(
             "=== LIVE CARD DATA (PUBLIC, NON-SENSITIVE) ===\n" + card_context

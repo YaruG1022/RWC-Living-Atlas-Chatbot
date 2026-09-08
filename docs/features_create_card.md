@@ -25,7 +25,7 @@ Click the **"Create Card"** or **"Add Card"** button on the page. A card creatio
 | Field | Required | Description |
 |-------|----------|-------------|
 | **Title** | ✅ Yes | The card name. Maximum 255 characters. |
-| **Category** | ✅ Yes | Choose from the dropdown: River, Watershed, Places, Other, or None. |
+| **Category** | ✅ Yes | Choose one of the categories offered in the dropdown. The available set is defined in the Atlas database, not fixed here. |
 | **Description** | Optional | A detailed explanation of the card's content. Maximum 2000 characters. |
 | **Organization** | Optional | The institution or organization that produced the data. |
 | **Funding** | Optional | The funding source for this resource. |

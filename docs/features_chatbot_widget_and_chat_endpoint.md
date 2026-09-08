@@ -69,9 +69,12 @@ Endpoint: `POST /chat/ask`
 ### Request body
 ```json
 {
-  "question": "string"
+  "question": "string",
+  "history": [{ "role": "user", "text": "string" }]
 }
 ```
+
+`history` is optional; the most recent few turns are replayed to the model for context.
 
 ### Success response
 ```json
@@ -82,32 +85,35 @@ Endpoint: `POST /chat/ask`
 
 ### Validation and errors
 - Empty/blank question -> HTTP 400
-- Missing `OPENAI_API_KEY` -> HTTP 503
-- OpenAI API exception -> HTTP 502
+- Chatbot not configured, or the language-model provider is unreachable, unauthorized, or rate-limited -> HTTP 503
+- Provider credits exhausted -> HTTP 402
+- Any other provider error -> HTTP 502
+
+Model name, token limits, and provider credentials are supplied by environment variables and are not recorded here — they change without any change to this contract.
 
 ---
 
-## Model and Prompt Behavior
+## How an Answer Is Assembled
 
-Backend sends:
-- A Living Atlas system prompt with product/domain constraints
-- User question as chat input
+The service is retrieval-grounded, not generation-only. For each question it gathers up to four context blocks and injects them into the system prompt:
 
-Default model:
-- `OPENAI_MODEL` env var if set
-- fallback: `gpt-4.1-mini`
+| Block | Source | What it provides |
+|-------|--------|------------------|
+| Reference documentation | Pinecone vector search over `docs/*.md` | Stable explanations of how features work |
+| Live Atlas facts | Backend `GET /atlas/summary` | Counts, card categories and tags, ArcGIS folder inventory |
+| Live card data | Backend `GET /cards/summary` | Public, non-sensitive details of matching cards |
+| Live skill outputs | `chat_agent.py` skills | Live ArcGIS REST catalog lookups and navigation links |
 
-Generation settings include:
-- temperature 0.4
-- max_tokens 600
+The split matters: documentation holds what is *true in general*, while the live blocks hold what is *true right now*. Anything countable or enumerable is served live so it cannot go stale in the docs.
+
+The live blocks require `ATLAS_API_URL` to be set to the Living Atlas backend. When it is unset or the backend is unreachable, those blocks are omitted and the assistant answers from documentation alone rather than failing.
 
 ---
 
 ## Operational Notes
 
-Current implementation is generation-only and does not include:
-- RAG retrieval grounding
-- conversation memory persistence
-- source citation in responses
+Not currently included:
+- conversation memory persisted across sessions
+- source citation for documentation passages (live skill outputs do get a `Sources` section)
 
-The frontend already surfaces development-state and fallback failure messaging.
+The frontend surfaces development-state and fallback failure messaging.

@@ -21,7 +21,7 @@ When answering card questions, the assistant is given only these fields:
 | Field | Description |
 |-------|-------------|
 | Title | The card's name |
-| Category | River, Watershed, Places, Other, or None |
+| Category | The card's classification, drawn from the live category list |
 | Description | Text describing the card's content |
 | Organization | The institution/organization that produced the data |
 | Funding | The funding source, if provided |
@@ -101,7 +101,7 @@ A: Live. The assistant queries the current database each time a card-related que
 | Term | Meaning |
 |------|---------|
 | Card | The core geolocated data unit of the Living Atlas |
-| Category | The card's classification: River, Watershed, Places, Other, or None |
+| Category | The card's classification; the available set is defined in the database, not in this document |
 | Tag | A keyword attached to a card for search/filtering |
 | Public card | A card visible to everyone; only these are exposed to the chatbot |
 | Private (uploader-only) card | A card visible only to its creator; never exposed to the chatbot |

@@ -7,7 +7,8 @@ Standalone chatbot microservice for the [RWC Living Atlas](https://github.com/CE
 RAG (retrieval-augmented generation) pipeline:
 
 1. **Retrieval** — the user's question is sent to a [Pinecone](https://www.pinecone.io/) index with hosted embeddings (`multilingual-e5-large`); Pinecone embeds the query server-side and returns the most relevant knowledge-base chunks. No local embedding model required.
-2. **Live context** — two additional context sources are gathered per question:
+2. **Live context** — three additional context sources are gathered per question:
+   - **Atlas facts** (optional): fetched from the Living Atlas backend's `/atlas/summary` endpoint — public card and ArcGIS counts, the card category and tag vocabulary, and the per-state folder inventory. Fetched for every question and cached for two minutes. Enabled by `ATLAS_API_URL`.
    - **Card data** (optional): fetched over HTTP from the Living Atlas backend's `/cards/summary` endpoint — public, non-sensitive card records only; this service never talks to the database directly. Enabled by `ATLAS_API_URL`.
    - **Agent skills**: live ArcGIS REST catalog lookups (`chat_agent.py`) that also produce `atlas-upload://` navigation links the Living Atlas frontend turns into quick actions.
 3. **Generation** — DeepSeek (OpenAI-compatible API) writes the answer from the assembled context.
@@ -63,3 +64,21 @@ Point the frontend's chatbot requests at this service's URL (e.g. via a `REACT_A
 ## Keeping the knowledge base in sync
 
 `docs/` describes Living Atlas features. When the main app changes, update the matching doc here and re-run `python scripts/index_docs.py`.
+
+### What belongs in `docs/` and what does not
+
+`docs/` is for facts that stay true between releases — how a feature works, where a control lives, what a term or folder abbreviation means.
+
+Anything **countable or enumerable** is deliberately kept out, because it goes stale the moment someone adds a card or an admin edits the ArcGIS catalog. The backend serves those live instead:
+
+| Fact | Live source |
+|------|-------------|
+| Public card count, contributing organizations, catalog size | `GET /atlas/summary/stats` |
+| Card categories, tag vocabulary, location types | `GET /atlas/summary/taxonomy` |
+| Per-state ArcGIS service counts, hosts, and folder inventory | `GET /atlas/summary/arcgis` |
+| All three in one context block | `GET /atlas/summary` |
+| Details of cards matching a question | `GET /cards/summary?q=` |
+
+So: write "the AQ folder holds Air Quality services" in a doc; never write "Washington has ~125 services". If you find yourself typing a number or an exhaustive list into `docs/`, it probably belongs behind one of these endpoints.
+
+All of them are read-only and return public, non-sensitive data only — no Users join, no private cards.

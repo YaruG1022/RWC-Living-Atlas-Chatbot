@@ -42,10 +42,7 @@ Order cards by time or distance.
 Narrow cards by category and/or tags.
 
 ### Category Options
-- River
-- Watershed
-- Places
-- Other
+The dropdown lists the categories currently defined in the Atlas. The set is not fixed in this document — read it from the live taxonomy so a newly added category is never missed.
 
 ### Tag Filter Behavior
 - Add one or more tags.

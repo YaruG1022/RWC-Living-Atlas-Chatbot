@@ -11,6 +11,8 @@ This document explains the spatial data the Living Atlas can display on the map.
 
 It is intended as a knowledge source for the chatbot so it can answer questions like "What is the AQ folder?", "Where does Idaho data come from?", or "What are those boundary lines on the map?".
 
+> **Counts and folder lists are not recorded here.** How many services each state publishes, and which folders exist, change as the catalog is updated. The chatbot reads those live from the backend's `/atlas/summary/arcgis` endpoint. This document explains what the folders *mean*; the live endpoint says what is *there*.
+
 ---
 
 ## How State Data Reaches the Map
@@ -29,12 +31,13 @@ Each entry in the panel has a type:
 |-------|-------|
 | Agency | **Washington State Department of Ecology** |
 | ArcGIS server | `https://gis.ecology.wa.gov/serverext/rest/services` |
-| Services in the Atlas | ~125 |
 | Mission | "To protect, preserve, and enhance Washington's environment for current and future generations." |
 
 The Department of Ecology is Washington's lead environmental agency, responsible for protecting the state's land, air, water, and climate. Its GIS server publishes environmental monitoring and regulatory datasets, organized into program folders.
 
-### Notable Washington folders
+### What Washington's folder names mean
+
+This is a glossary, not an inventory — the live catalog is the authority on which folders currently exist.
 
 | Folder | What it generally contains |
 |--------|----------------------------|
@@ -60,12 +63,13 @@ The Department of Ecology is Washington's lead environmental agency, responsible
 |-------|-------|
 | Agency | **Idaho Department of Water Resources (IDWR)** |
 | ArcGIS server | `https://gis.idwr.idaho.gov/hosting/rest/services` |
-| Services in the Atlas | ~267 |
 | Mission | "To serve Idahoans by ensuring their water is conserved and available to sustain Idaho's economy, ecosystems, and resulting quality of life." |
 
 Idaho's data comes from IDWR, the state agency that manages water rights, water resource planning, and well/groundwater data. Because IDWR is a water-focused agency, the Idaho layers center on water administration, allocation, and hydrology rather than general environmental monitoring.
 
-### Notable Idaho folders
+### What Idaho's folder names mean
+
+This is a glossary, not an inventory — the live catalog is the authority on which folders currently exist.
 
 | Folder | What it generally contains |
 |--------|----------------------------|
@@ -89,12 +93,13 @@ Idaho's data comes from IDWR, the state agency that manages water rights, water 
 |-------|-------|
 | Agency | **Oregon Geospatial Enterprise Operations (GEO)**, within Enterprise Information Services |
 | ArcGIS server | `https://navigator.state.or.us/arcgis/rest/services` |
-| Services in the Atlas | ~20 |
 | Role | Coordinates statewide GIS data, standards, and the Oregon Framework Program; hosts authoritative "Framework" data. |
 
 Oregon's data comes from the state's central geospatial office (GEO), not a single environmental agency. GEO publishes **Framework data** — the authoritative statewide base layers used across Oregon government — through the Oregon Navigator server and GEOHub.
 
-### Notable Oregon folders
+### What Oregon's folder names mean
+
+This is a glossary, not an inventory — the live catalog is the authority on which folders currently exist.
 
 | Folder | What it generally contains |
 |--------|----------------------------|
@@ -148,6 +153,9 @@ A: The Idaho Department of Water Resources (IDWR) ArcGIS server (`gis.idwr.idaho
 
 **Q: Where does the Oregon data come from?**
 A: Oregon's Geospatial Enterprise Operations (GEO) via the Oregon Navigator server (`navigator.state.or.us`). It provides authoritative statewide "Framework" base layers like boundaries, hydrography, wetlands, and hazards.
+
+**Q: How many services or folders does a state have?**
+A: Read the live count from the Atlas catalog rather than from this document — the number changes whenever the catalog is refreshed or an admin adds or removes a service.
 
 **Q: What is the "AQ" folder?**
 A: AQ is Washington's Air Quality folder. It includes services like hourly air quality monitoring results and a wildfire smoke forecast.
