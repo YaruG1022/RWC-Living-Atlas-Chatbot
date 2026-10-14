@@ -49,10 +49,10 @@ jobs:
 
   release-evaluation:
     needs: sync
-    # One small smoke run per service publication/operator run, not on the
+    # One sequential release evaluation per service publication/operator run, not on the
     # recurring reconciliation schedule (which must not generate chat charges).
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/release-evaluation.yml
     with:
-      ids: 'T01,T03,V01'
+      ids: ''
       require_vision: true
