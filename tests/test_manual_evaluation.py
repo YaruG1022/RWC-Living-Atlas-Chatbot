@@ -19,3 +19,13 @@ def test_cost_requires_actual_usage_and_explicit_prices_for_all_calls():
         'vision': {'status': 'used', 'prompt_tokens': 1000, 'completion_tokens': 100}}
     assert estimated_cost(metrics, {}) is None
     assert estimated_cost(metrics, {'text_input': 1, 'text_output': 2, 'vision_input': 3, 'vision_output': 4}) == 0.0046
+
+
+def test_evaluation_rejects_used_but_unrelated_screenshots():
+    session = Mock(); response = Mock(); session.post.return_value = response
+    response.status_code = 200; response.headers = {'Content-Type': 'application/json'}
+    response.json.return_value = {'answer': 'Gallery controls', 'sources': [{'section_id': 'detail-view', 'version': 'same'}],
+        'metrics': {'manual_version': 'same', 'vision': {'status': 'used', 'version': 'same', 'image_ids': ['card-container-cover']}}}
+    case = {'id': 'V', 'kind': 'visual', 'question': 'Gallery buttons', 'chapters': ['detail-view'], 'expected_image_ids': ['detail-view-gallery']}
+    report = evaluate('https://chat.example', [case], session=session, expected_version='same', require_vision=True)
+    assert report['results'][0]['problems'] == ['missing-target-screenshot', 'unrelated-screenshot']

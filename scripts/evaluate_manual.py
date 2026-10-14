@@ -64,6 +64,12 @@ def evaluate(base, cases, *, session=None, prices=None, expected_version=None, r
                 problems.append('vision-not-used')
             if status == 'used' and metrics['vision'].get('version') != metrics.get('manual_version'):
                 problems.append('image-version-mismatch')
+            if status == 'used' and case.get('expected_image_ids'):
+                ids = metrics['vision'].get('image_ids', [])
+                if not set(ids).intersection(case['expected_image_ids']):
+                    problems.append('missing-target-screenshot')
+                if any(not any(value.startswith(chapter + '-') for chapter in case['chapters']) for value in ids):
+                    problems.append('unrelated-screenshot')
             result.update(answer=body.get('answer'), sources=sources, metrics=metrics,
                 structural_status='failed' if problems else 'passed', problems=problems,
                 estimated_model_usd=estimated_cost(metrics, prices or {}))
