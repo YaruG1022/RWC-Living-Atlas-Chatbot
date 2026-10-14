@@ -1,0 +1,51 @@
+name: Evaluate published manual answers
+on:
+  workflow_dispatch:
+    inputs:
+      ids:
+        description: 'Case IDs (empty runs all 11 cases; sequential, billed provider requests)'
+        default: 'T01,T03,V01'
+        required: false
+      require_vision:
+        description: 'Fail visual cases unless versioned screenshots were actually inspected'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Evaluate current release through the real service
+        env:
+          MANUAL_BASE_URL: ${{ vars.MANUAL_BASE_URL || 'https://rwc-living-atlas.netlify.app' }}
+          CHATBOT_BASE_URL: ${{ vars.CHATBOT_BASE_URL || 'https://rwc-living-atlas-chatbot.onrender.com' }}
+          CASE_IDS: ${{ inputs.ids }}
+          REQUIRE_VISION: ${{ inputs.require_vision }}
+        run: |
+          python - <<'PY'
+          import os, subprocess, requests
+          from manual_knowledge import validate_manifest
+          response = requests.get(os.environ['MANUAL_BASE_URL'] + '/manual/current.json', timeout=30, allow_redirects=False)
+          response.raise_for_status()
+          manifest = response.json()
+          validate_manifest(manifest)
+          command = ['python', 'scripts/evaluate_manual.py', '--base-url', os.environ['CHATBOT_BASE_URL'], '--expected-version', manifest['version'], '--output', 'evaluation-result.json']
+          if os.environ.get('CASE_IDS'):
+              command += ['--ids', os.environ['CASE_IDS']]
+          if os.environ.get('REQUIRE_VISION') == 'true':
+              command += ['--require-vision']
+          subprocess.run(command, check=True)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: manual-answer-evaluation
+          path: evaluation-result.json
+          if-no-files-found: warn

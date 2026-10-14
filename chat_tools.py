@@ -56,6 +56,7 @@ class ToolContext:
     visual_status: dict = field(default_factory=dict)
     user_question: str = ''
     last_manual_sources: list[dict] = field(default_factory=list)
+    generation_usage: list[dict] = field(default_factory=list)
 
     def add_manual_sources(self, sources):
         for source in sources:

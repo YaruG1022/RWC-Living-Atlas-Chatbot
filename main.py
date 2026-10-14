@@ -45,7 +45,9 @@ app.include_router(chat_router)
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "manual_protocol": "text-v1-visual-v1",
+        "revision": os.environ.get('RENDER_GIT_COMMIT'),
+        "vision_configured": bool(os.environ.get('VISION_API_KEY', '').strip() and os.environ.get('VISION_MODEL', '').strip())}
 
 
 if __name__ == "__main__":

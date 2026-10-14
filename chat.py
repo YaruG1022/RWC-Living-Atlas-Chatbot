@@ -20,6 +20,7 @@ Generation: DeepSeek API (OpenAI-compatible), set DEEPSEEK_API.
 
 import json
 import os
+import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -110,6 +111,8 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
     sources: list[dict[str, Any]] = Field(default_factory=list)
+    # Machine-readable evaluation data; the widget displays only answer/sources.
+    metrics: dict[str, Any] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +218,7 @@ def run_tool_loop(client: OpenAI, model: str, messages: list, ctx: ToolContext):
     """
     for round_index in range(MAX_TOOL_ROUNDS):
         response = _completion(client, model, messages, with_tools=True)
+        record_usage(response, model, ctx)
         message = response.choices[0].message
 
         tool_calls = getattr(message, "tool_calls", None)
@@ -235,7 +239,16 @@ def run_tool_loop(client: OpenAI, model: str, messages: list, ctx: ToolContext):
 
     # Budget spent and the model still wants tools — make it answer.
     print(f"[chat] Tool budget of {MAX_TOOL_ROUNDS} rounds exhausted; forcing an answer.")
-    return _completion(client, model, messages, with_tools=False)
+    response = _completion(client, model, messages, with_tools=False)
+    record_usage(response, model, ctx)
+    return response
+
+
+def record_usage(response, model, ctx):
+    usage = getattr(response, 'usage', None)
+    ctx.generation_usage.append({'model': model,
+        'prompt_tokens': getattr(usage, 'prompt_tokens', None),
+        'completion_tokens': getattr(usage, 'completion_tokens', None)})
 
 
 def _looks_like_missing_tool_support(exc: Exception) -> bool:
@@ -268,6 +281,7 @@ def ask(payload: ChatRequest):
         print("[chat] Warning: DEEPSEEK_API contained leading/trailing whitespace; sanitized automatically.")
 
     client = OpenAI(base_url="https://api.deepseek.com", api_key=api_key)
+    started = time.perf_counter()
     model = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 
     ctx = ToolContext()
@@ -290,6 +304,7 @@ def ask(payload: ChatRequest):
                 + gather_all_context(question, ctx)
             )
             response = _completion(client, model, fallback, with_tools=False)
+            record_usage(response, model, ctx)
 
         answer = (response.choices[0].message.content or "").strip()
         if not answer:
@@ -301,7 +316,10 @@ def ask(payload: ChatRequest):
                 answer="Sorry — I couldn't finish generating an answer. Please try asking again."
             )
         answer, sources = resolve_manual_sources(answer, ctx)
-        return ChatResponse(answer=append_navigation_links(answer, ctx.navigation_links), sources=sources)
+        return ChatResponse(answer=append_navigation_links(answer, ctx.navigation_links), sources=sources,
+            metrics={'duration_ms': round((time.perf_counter() - started) * 1000),
+                'generation': ctx.generation_usage, 'vision': ctx.visual_status or {'status': 'not-requested'},
+                'manual_version': (ctx.manual_pointer or {}).get('version')})
 
     except HTTPException:
         raise
