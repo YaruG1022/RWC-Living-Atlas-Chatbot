@@ -1,65 +1,44 @@
-name: Reindex knowledge base
-
-# Rebuilds the Pinecone index whenever the knowledge base changes, so an edit to
-# docs/ can never sit un-indexed because someone forgot to run the script.
+name: Sync published app manual
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'docs/**'
-      - 'scripts/index_docs.py'
-      - '.github/workflows/reindex-docs.yml'
+  repository_dispatch:
+    types: [atlas-manual-published]
   workflow_dispatch:
     inputs:
-      reason:
-        description: 'Why you are rebuilding by hand (recorded in the log)'
+      revision:
+        description: 'Published app commit (empty uses the currently published version)'
         required: false
-        default: 'manual rebuild'
 
-# index_docs.py clears the whole index before upserting, so a run that overlaps
-# another leaves the index half-empty. Queue runs instead of cancelling: a run
-# cancelled mid-upsert is exactly the broken state we are avoiding.
+permissions:
+  contents: read
+
+# All writers serialize. Never cancel a writer while its active pointer propagates.
 concurrency:
-  group: pinecone-index
+  group: pinecone-manual-sync
   cancel-in-progress: false
 
 jobs:
-  reindex:
+  sync:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: pip
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Check the Pinecone key is configured
+      - run: pip install -r requirements.txt pytest httpx
+      - run: python -m pytest -q tests
+      - name: Import, verify and activate the published app release
         env:
           PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
-        run: |
-          if [ -z "$PINECONE_API_KEY" ]; then
-            echo "::error::PINECONE_API_KEY is not set. Add it under Settings > Secrets and variables > Actions."
-            exit 1
-          fi
-
-      - name: Rebuild the index
-        env:
-          PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
-          # Optional overrides; index_docs.py has defaults for both.
           PINECONE_INDEX: ${{ vars.PINECONE_INDEX }}
+          PINECONE_INDEX_HOST: ${{ vars.PINECONE_INDEX_HOST }}
           PINECONE_EMBED_MODEL: ${{ vars.PINECONE_EMBED_MODEL }}
-          RUN_REASON: ${{ inputs.reason }}
+          MANUAL_BASE_URL: ${{ vars.MANUAL_BASE_URL }}
+          EXPECTED_REVISION: ${{ github.event.client_payload.revision || inputs.revision }}
+          EXPECTED_VERSION: ${{ github.event.client_payload.version }}
+          EXPECTED_CHECKSUM: ${{ github.event.client_payload.checksum }}
         run: |
-          echo "Trigger: ${GITHUB_EVENT_NAME} ${RUN_REASON}"
-          python scripts/index_docs.py | tee reindex.log
-          echo "### Knowledge base reindexed" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          tail -n 20 reindex.log >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          python scripts/index_docs.py --activate
