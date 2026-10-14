@@ -1,5 +1,13 @@
 name: Evaluate published manual answers
 on:
+  workflow_call:
+    inputs:
+      ids:
+        type: string
+        default: 'T01,T03,V01'
+      require_vision:
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       ids:
@@ -28,10 +36,25 @@ jobs:
           CHATBOT_BASE_URL: ${{ vars.CHATBOT_BASE_URL || 'https://rwc-living-atlas-chatbot.onrender.com' }}
           CASE_IDS: ${{ inputs.ids }}
           REQUIRE_VISION: ${{ inputs.require_vision }}
+          EXPECTED_BOT_REVISION: ${{ github.sha }}
         run: |
           python - <<'PY'
-          import os, subprocess, requests
+          import os, subprocess, requests, time
           from manual_knowledge import validate_manifest
+          # A successful index import can precede Render's automatic deployment.
+          # Wait for this actual service revision before evaluating its answers.
+          for attempt in range(30):
+              try:
+                  health_response = requests.get(os.environ['CHATBOT_BASE_URL'] + '/health', timeout=15, allow_redirects=False)
+                  health_response.raise_for_status()
+                  health = health_response.json()
+                  if health.get('revision') == os.environ['EXPECTED_BOT_REVISION'] and health.get('manual_protocol') == 'text-v1-visual-v1':
+                      break
+              except (requests.RequestException, ValueError):
+                  pass
+              if attempt == 29:
+                  raise RuntimeError('Expected Render service revision did not become healthy')
+              time.sleep(10)
           response = requests.get(os.environ['MANUAL_BASE_URL'] + '/manual/current.json', timeout=30, allow_redirects=False)
           response.raise_for_status()
           manifest = response.json()

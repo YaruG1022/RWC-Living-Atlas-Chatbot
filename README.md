@@ -97,7 +97,7 @@ At most one visual tool call, two PNGs (each <=2 MB), 1,000 visual output tokens
 
 ## Release evaluation
 
-`evaluation/manual-cases.json` contains 11 English/Chinese, text, visual, multistep, unsupported and live-data questions. The manual `Evaluate published manual answers` workflow runs a selected subset against the actual deployed API and uploads the complete results. Default T01,T03,V01 is three sequential billed requests, not a load test. Enable require_vision after configuring the visual provider.
+`evaluation/manual-cases.json` contains 11 English/Chinese, text, visual, multistep, unsupported and live-data questions. The `Evaluate published manual answers` workflow runs a selected subset against the actual deployed API and uploads the complete results. Default T01,T03,V01 is three sequential billed requests, not a load test. After a main service publication/operator sync, the sync workflow also runs T01,T03,V01 with required visual evidence, waiting for the expected Render revision. Scheduled reconciliation never generates chat evaluation requests.
 
 ```bash
 python scripts/evaluate_manual.py --base-url https://rwc-living-atlas-chatbot.onrender.com --ids T01,T03,V01 --expected-version <published-version> --output /tmp/manual-evaluation.json
