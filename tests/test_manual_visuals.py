@@ -90,6 +90,23 @@ def test_image_rejects_spa_fallback_corruption_and_oversize():
             visuals.fetch_image(session, 'https://atlas.example', entry['version'], entry)
 
 
+def test_gallery_caption_beats_unrelated_first_chapter_and_overviews():
+    entries = [
+        {'id': 'card-container-cover', 'sectionId': 'card-container', 'state': 'default', 'blockIds': ['cover-block'], 'caption': 'Cover Image Navigation'},
+        {'id': 'card-container-overview', 'sectionId': 'card-container', 'state': 'chapter-overview', 'blockIds': ['cover-block'], 'caption': 'Card Container'},
+        {'id': 'detail-view-gallery', 'sectionId': 'detail-view', 'state': 'default', 'blockIds': ['gallery-block'], 'caption': 'Image Gallery'},
+        {'id': 'detail-view-slideshow', 'sectionId': 'detail-view', 'state': 'slideshow', 'blockIds': ['gallery-block'], 'caption': 'Image Gallery'},
+    ]
+    sources = [
+        {'section_id': 'card-container', 'operation_block_ids': ['cover-block'], 'image_ids': ['card-container-cover', 'card-container-overview']},
+        {'section_id': 'detail-view', 'operation_block_ids': ['gallery-block'], 'image_ids': ['detail-view-gallery', 'detail-view-slideshow']},
+    ]
+    result = visuals.select_visuals({'entries': entries}, sources, query='Image layout dropdown and See all images button position in gallery')
+    assert [entry['id'] for entry in result] == ['detail-view-gallery']
+    result = visuals.select_visuals({'entries': entries}, sources, 'slideshow', query='card image gallery slideshow layout controls arrows')
+    assert [entry['id'] for entry in result] == ['detail-view-slideshow']
+
+
 def test_openai_compatible_request_uses_verified_images_text_and_chinese(monkeypatch):
     manifest, bundle, catalog, _ = visual_package()
     pointer = {'base_url': 'https://atlas.example', 'version': manifest['version'], 'revision': manifest['revision'], 'visuals': manifest['visuals']}
