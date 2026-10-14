@@ -28,8 +28,9 @@ from typing import Any, Callable
 import requests
 
 from chat_agent import build_default_chat_agent
+from manual_knowledge import read_active, search_manual
 
-NAMESPACE = "__default__"
+_LAST_MANUAL_POINTER = None
 
 _CHAT_AGENT = build_default_chat_agent()
 
@@ -47,6 +48,19 @@ class ToolContext:
     """
 
     navigation_links: list[dict] = field(default_factory=list)
+    manual_sources: list[dict] = field(default_factory=list)
+    manual_pointer: dict | None = None
+    manual_lookup_done: bool = False
+
+    def add_manual_sources(self, sources):
+        for source in sources:
+            existing = next((item for item in self.manual_sources if
+                (item['section_id'], item['version']) == (source['section_id'], source['version'])), None)
+            if existing:
+                for field in ['block_ids', 'step_ids', 'image_ids']:
+                    existing[field] = list(dict.fromkeys(existing.get(field, []) + source.get(field, [])))
+            else:
+                self.manual_sources.append(dict(source))
 
     def add_navigation_links(self, links: list[dict] | None) -> None:
         seen = {link.get("url") for link in self.navigation_links}
@@ -70,36 +84,39 @@ def get_pinecone_index():
     if not api_key:
         raise RuntimeError("PINECONE_API_KEY environment variable is not set.")
 
-    index_name = os.environ.get("PINECONE_INDEX", "living-atlas-docs-hosted")
+    index_name = (os.environ.get("PINECONE_INDEX") or "living-atlas-docs-hosted")
 
     from pinecone import Pinecone
 
     pc = Pinecone(api_key=api_key)
-    return pc.Index(index_name)
+    host = os.environ.get('PINECONE_INDEX_HOST', '').strip()
+    return pc.Index(host=host) if host else pc.Index(index_name)
 
 
-def search_documentation(query: str, top_k: int = 3) -> str:
-    """Query Pinecone for the top-k most relevant documentation chunks."""
+def search_documentation(query: str, top_k: int = 3, ctx: ToolContext | None = None) -> str:
+    """Read only a validated version of the app manual; never the legacy docs namespace."""
+    global _LAST_MANUAL_POINTER
+    ctx = ctx or ToolContext()
     query = (query or "").strip()
     if not query:
         return "No search query was provided."
 
     try:
         index = get_pinecone_index()
-        result = index.search(
-            namespace=NAMESPACE,
-            top_k=top_k,
-            inputs={"text": query},
-        )
-        hits = result["result"]["hits"]
-        chunks = [
-            hit["fields"]["content"]
-            for hit in hits
-            if hit.get("fields", {}).get("content")
-        ]
-        if not chunks:
-            return f"No documentation matched '{query}'."
-        return "\n\n---\n\n".join(chunks)
+        if not ctx.manual_lookup_done:
+            try:
+                ctx.manual_pointer = read_active(index)
+                _LAST_MANUAL_POINTER = ctx.manual_pointer
+            except Exception:
+                ctx.manual_pointer = _LAST_MANUAL_POINTER
+            ctx.manual_lookup_done = True
+        if not ctx.manual_pointer:
+            return "The app user manual has not been activated yet. No legacy documentation was used. Do not guess feature instructions."
+        passages, sources = search_manual(index, query, ctx.manual_pointer, top_k)
+        ctx.add_manual_sources(sources)
+        if not passages:
+            return "No app manual passages matched. Say the manual does not provide enough information."
+        return "\n\n---\n\n".join(passages)
     except Exception as exc:
         print(f"[chat-tools] Documentation search failed: {exc}")
         return "The documentation index is currently unreachable."
@@ -234,7 +251,7 @@ TOOLS: list[Tool] = [
             },
             "required": ["query"],
         },
-        handler=lambda args, ctx: search_documentation(args.get("query", "")),
+        handler=lambda args, ctx: search_documentation(args.get("query", ""), ctx=ctx),
     ),
     Tool(
         name="search_cards",

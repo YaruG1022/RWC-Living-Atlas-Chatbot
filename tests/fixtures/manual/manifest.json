@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "version": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-0510976d38b8",
+  "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "sectionCount": 2,
+  "blockCount": 16,
+  "sectionIds": [
+    "chatbot",
+    "add-card"
+  ],
+  "files": [
+    {
+      "path": "manual.json",
+      "sha256": "0510976d38b8af3ad44c9e7b5cb1130c22c3ab7721f3e6f9cd80609bc5f9ccc6",
+      "bytes": 10621
+    }
+  ],
+  "bundlePath": "/manual/releases/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-0510976d38b8/manual.json",
+  "manifestPath": "/manual/releases/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-0510976d38b8/manifest.json"
+}
