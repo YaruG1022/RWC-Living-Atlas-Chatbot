@@ -51,6 +51,11 @@ class ToolContext:
     manual_sources: list[dict] = field(default_factory=list)
     manual_pointer: dict | None = None
     manual_lookup_done: bool = False
+    visual_lookup_done: bool = False
+    visual_result: str = ''
+    visual_status: dict = field(default_factory=dict)
+    user_question: str = ''
+    last_manual_sources: list[dict] = field(default_factory=list)
 
     def add_manual_sources(self, sources):
         for source in sources:
@@ -97,6 +102,7 @@ def search_documentation(query: str, top_k: int = 3, ctx: ToolContext | None = N
     """Read only a validated version of the app manual; never the legacy docs namespace."""
     global _LAST_MANUAL_POINTER
     ctx = ctx or ToolContext()
+    ctx.last_manual_sources = []
     query = (query or "").strip()
     if not query:
         return "No search query was provided."
@@ -113,6 +119,7 @@ def search_documentation(query: str, top_k: int = 3, ctx: ToolContext | None = N
         if not ctx.manual_pointer:
             return "The app user manual has not been activated yet. No legacy documentation was used. Do not guess feature instructions."
         passages, sources = search_manual(index, query, ctx.manual_pointer, top_k)
+        ctx.last_manual_sources = sources
         ctx.add_manual_sources(sources)
         if not passages:
             return "No app manual passages matched. Say the manual does not provide enough information."
@@ -150,6 +157,29 @@ def search_cards(query: str) -> str:
     except Exception as exc:
         print(f"[chat-tools] Card search failed: {exc}")
         return "The card database is currently unreachable."
+
+
+def inspect_manual_visuals(query: str, ctx: ToolContext, state: str = 'default') -> str:
+    """One bounded visual inspection per request, using its pinned manual version."""
+    if ctx.visual_lookup_done:
+        return ctx.visual_result
+    ctx.visual_lookup_done = True
+    passages = search_documentation(query, ctx=ctx)
+    if not ctx.manual_pointer or not ctx.last_manual_sources:
+        ctx.visual_status = {'status': 'unavailable', 'reason': 'manual-unavailable'}
+        ctx.visual_result = passages
+        return passages
+    from manual_visuals import describe_visuals
+    answer, ctx.visual_status = describe_visuals(ctx.user_question or query, passages, ctx.last_manual_sources, ctx.manual_pointer, state)
+    if answer:
+        ids = set(ctx.visual_status['image_ids'])
+        for source in ctx.manual_sources:
+            source['inspected_image_ids'] = [value for value in source.get('image_ids', []) if value in ids]
+        ctx.visual_result = '=== Verified manual visual evidence ===\n' + answer
+    else:
+        ctx.visual_result = ('Manual screenshots could not be inspected. Explain only what the retrieved text supports; '
+            'say that image details could not be checked, and do not guess button positions or icons.\n' + passages)
+    return ctx.visual_result
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +256,17 @@ class Tool:
 
 
 TOOLS: list[Tool] = [
+    Tool(
+        name='inspect_manual_visuals',
+        description=('Inspect the versioned user manual screenshots together with retrieved text. Use only when '
+            'the user needs visual evidence about an icon, button position, interface layout, or gallery state. '
+            'Do not call for text-only instructions, live data, or topics the manual does not cover. '
+            'Supply English feature keywords and optionally a gallery state. At most one visual inspection per question.'),
+        parameters={'type': 'object', 'properties': {
+            'query': {'type': 'string', 'description': 'English keywords identifying the feature/control to inspect.'},
+            'state': {'type': 'string', 'enum': ['default', 'slideshow', 'slideshow-next']}}, 'required': ['query']},
+        handler=lambda args, ctx: inspect_manual_visuals(args.get('query', ''), ctx, args.get('state', 'default')),
+    ),
     Tool(
         name="search_documentation",
         description=(
@@ -347,6 +388,10 @@ def gather_all_context(question: str, ctx: ToolContext) -> str:
     """
     blocks = []
     for tool in TOOLS:
+        # An eager text fallback cannot determine visual intent. Never charge for
+        # image calls merely because the primary model rejected tool calling.
+        if tool.name == 'inspect_manual_visuals':
+            continue
         output = execute_tool(tool.name, {"query": question}, ctx)
         if output:
             blocks.append(f"=== {tool.name} ===\n{output}")

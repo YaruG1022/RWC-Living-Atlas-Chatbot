@@ -29,7 +29,7 @@ def test_request_pins_one_version_and_live_tools_are_preserved(index, monkeypatc
     publish_bundle(index, manifest, bundle, 'https://atlas.example', activate=True, attempts=1)
     second = chat_tools.execute_tool('search_documentation', {'query': 'creation requirements'}, ctx)
     assert first and second and all(s['version'] == version for s in ctx.manual_sources)
-    assert {t['function']['name'] for t in chat_tools.tool_schemas()} == {'search_documentation', 'search_cards', 'browse_arcgis_catalog'}
+    assert {t['function']['name'] for t in chat_tools.tool_schemas()} == {'search_documentation', 'inspect_manual_visuals', 'search_cards', 'browse_arcgis_catalog'}
     monkeypatch.setenv('ATLAS_API_URL', 'https://backend.example')
     response = Mock(); response.json.return_value = {'context': 'Live public card records'}
     monkeypatch.setattr(chat_tools.requests, 'get', Mock(return_value=response))

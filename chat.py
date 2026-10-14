@@ -4,7 +4,8 @@ chat.py  —  /chat/ask endpoint
 The model answers by calling tools (chat_tools.py) rather than being handed
 everything up front:
 
-  search_documentation   Pinecone vector search over docs/*.md
+  search_documentation   Pinecone search over the published app manual
+  inspect_manual_visuals verified manual screenshots + a separate vision model
   search_cards           live public card records from the Atlas backend
   browse_arcgis_catalog  live state ArcGIS REST catalog + quick-action links
 
@@ -58,6 +59,12 @@ already given — do not guess, and do not answer from memory about what the Atl
 contains. Call a tool even when the question is not in English; pass English keywords
 as the query and answer in the user's own language. If a tool reports that a service is
 unreachable, say so plainly rather than inventing an answer.
+
+VISUAL QUESTIONS: For icon appearance, button positions, layout or expanded gallery
+states, call inspect_manual_visuals after retrieving the relevant chapter. Use its
+verified screenshots and text. For text-only questions, do not call the visual tool.
+Screenshots depict manual examples, not current cards or real users. If images cannot
+be inspected, say so and use only sourced text; never guess an unseen visual detail.
 
 If, after using the tools, you still cannot answer, say so honestly.
 
@@ -264,6 +271,7 @@ def ask(payload: ChatRequest):
     model = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 
     ctx = ToolContext()
+    ctx.user_question = question
     messages = build_messages(payload, question, ctx)
 
     try:

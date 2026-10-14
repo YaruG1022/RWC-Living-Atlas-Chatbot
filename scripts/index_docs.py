@@ -51,6 +51,9 @@ def main():
     if args.bundle_dir:
         manifest = json.loads((args.bundle_dir / "manifest.json").read_bytes())
         bundle = validate_bundle(manifest, (args.bundle_dir / "manual.json").read_bytes())
+        if manifest.get('visuals'):
+            from manual_visuals import validate_catalog
+            bundle['_visual_catalog'] = validate_catalog(manifest['visuals'], (args.bundle_dir / manifest['visuals']['path']).read_bytes(), manifest['version'], manifest['revision'], bundle)
     else:
         import requests
         session = requests.Session()
