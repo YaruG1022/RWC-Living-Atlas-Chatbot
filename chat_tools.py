@@ -29,6 +29,7 @@ import requests
 
 from chat_agent import build_default_chat_agent
 from manual_knowledge import read_active, search_manual
+from question_intent import is_text_only_question
 
 _LAST_MANUAL_POINTER = None
 
@@ -164,6 +165,9 @@ def search_cards(query: str) -> str:
 
 def inspect_manual_visuals(query: str, ctx: ToolContext, state: str = 'default') -> str:
     """One bounded visual inspection per request, using its pinned manual version."""
+    if is_text_only_question(ctx.user_question):
+        ctx.visual_status = {'status': 'not-requested'}
+        return search_documentation(query, ctx=ctx)
     if ctx.visual_lookup_done:
         return ctx.visual_result
     ctx.visual_lookup_done = True
@@ -355,7 +359,7 @@ TOOLS: list[Tool] = [
 _TOOLS_BY_NAME = {tool.name: tool for tool in TOOLS}
 
 
-def tool_schemas() -> list[dict]:
+def tool_schemas(include_visual=True) -> list[dict]:
     """The `tools` payload for an OpenAI-compatible chat completion request."""
     return [
         {
@@ -366,7 +370,7 @@ def tool_schemas() -> list[dict]:
                 "parameters": tool.parameters,
             },
         }
-        for tool in TOOLS
+        for tool in TOOLS if include_visual or tool.name != 'inspect_manual_visuals'
     ]
 
 

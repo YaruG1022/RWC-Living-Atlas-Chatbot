@@ -172,3 +172,12 @@ def test_eager_text_fallback_never_calls_vision(monkeypatch):
     monkeypatch.setattr(chat_tools, 'browse_arcgis_catalog', lambda *args: 'Live ArcGIS')
     assert 'Manual text' in chat_tools.gather_all_context('How to add a card?', chat_tools.ToolContext())
     describe.assert_not_called()
+
+
+def test_procedural_question_cannot_be_upgraded_to_a_billed_visual_call(monkeypatch):
+    describe = Mock(); monkeypatch.setattr(visuals, 'describe_visuals', describe)
+    monkeypatch.setattr(chat_tools, 'search_documentation', lambda *args, **kwargs: 'Verified gallery reorder steps')
+    ctx = chat_tools.ToolContext(user_question='如何修改图片顺序，并让第二张图片变成封面？')
+    assert chat_tools.execute_tool('inspect_manual_visuals', {'query': 'gallery reorder icons'}, ctx) == 'Verified gallery reorder steps'
+    assert ctx.visual_status == {'status': 'not-requested'}
+    describe.assert_not_called()
