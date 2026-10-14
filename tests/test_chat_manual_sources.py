@@ -66,3 +66,21 @@ def test_failed_pointer_read_can_use_last_validated_version(index, monkeypatch):
     assert 'Card Creation' in first
     monkeypatch.setattr(chat_tools, 'read_active', Mock(side_effect=RuntimeError('temporarily unavailable')))
     assert 'Card Creation' in chat_tools.search_documentation('create card')
+
+
+@pytest.mark.parametrize('question,expected', [
+    ('What does the pencil icon do?', True), ('Where is the close button?', True),
+    ('What controls appear when Image layout is Slideshow?', True), ('这个双箭头图标是什么意思？', True),
+    ('按钮在哪里？', True), ('How many images can I upload?', False),
+    ('如何修改图片顺序，并让第二张图片变成封面？', False), ('Which fields are required?', False),
+])
+def test_explicit_visual_intent_keeps_text_questions_on_the_existing_path(question, expected):
+    assert chat.requires_visual_evidence(question) == expected
+
+
+def test_provider_must_call_visual_tool_for_explicit_visual_requests():
+    client = Mock()
+    chat._completion(client, 'model', [], True, force_visual=True)
+    assert client.chat.completions.create.call_args.kwargs['tool_choice'] == {'type': 'function', 'function': {'name': 'inspect_manual_visuals'}}
+    chat._completion(client, 'model', [], True)
+    assert client.chat.completions.create.call_args.kwargs['tool_choice'] == 'auto'
