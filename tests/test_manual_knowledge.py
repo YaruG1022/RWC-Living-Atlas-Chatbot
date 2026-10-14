@@ -74,6 +74,30 @@ def test_modified_payload_fails_before_index_writes():
         validate_bundle(manifest, (FIXTURE / 'manual.json').read_bytes() + b' ')
 
 
+def test_operation_records_keep_shared_prerequisites_without_duplicate_blocks():
+    manifest, bundle = package()
+    section = next(section for section in bundle['sections'] if section['id'] == 'add-card')
+    section['contextBlockIds'] = ['add-card-004', 'add-card-006']
+    records = [record for record in build_records(manifest, bundle) if record['section_id'] == 'add-card']
+    assert all('Login is required' in record['content'] and 'Category is optional' in record['content'] for record in records)
+    assert all(set(section['contextBlockIds']) <= set(record['block_ids']) for record in records)
+    assert all(len(record['block_ids']) == len(set(record['block_ids'])) for record in records)
+
+
+def test_same_app_release_reindexes_into_new_schema_without_mutating_old_namespace():
+    index = FakeIndex(); manifest, bundle = package()
+    publish_bundle(index, manifest, bundle, 'https://atlas.example', activate=True, attempts=1)
+    pointer = index.data[CONTROL_NAMESPACE][ACTIVE_ID]
+    old_namespace = namespace_for(manifest['version'], 1)
+    index.data[old_namespace] = index.data.pop(pointer['namespace'])
+    pointer['namespace'] = old_namespace; pointer.pop('record_schema')
+    old_records = copy.deepcopy(index.data[old_namespace])
+    assert read_active(index)['namespace'] == old_namespace
+    assert publish_bundle(index, manifest, bundle, 'https://atlas.example', activate=True, attempts=1)['status'] == 'activated'
+    assert read_active(index)['namespace'] == namespace_for(manifest['version'], 2)
+    assert index.data[old_namespace] == old_records
+
+
 def test_stage_failure_keeps_old_active_version_and_legacy_namespace():
     index = FakeIndex()
     first, bundle = package()
