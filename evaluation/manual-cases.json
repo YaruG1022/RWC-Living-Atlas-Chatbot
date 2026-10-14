@@ -1,0 +1,13 @@
+[
+  {"id":"T01","kind":"text","question":"Which card creation fields are required, and is Category mandatory?","chapters":["add-card"],"review":"Author Name/Title/Short Description/location requirements; Category optional; no historical Category-required claim."},
+  {"id":"T02","kind":"text","question":"How do I create a card from a polygon drawn on the map? Include the prerequisites and complete steps.","chapters":["polygon-tools","add-card"],"review":"Draw/finish polygon, create card, login and required form fields, submit; no truncated sequence."},
+  {"id":"T03","kind":"text","question":"如何修改卡片的图片顺序，并让第二张图片变成封面？","chapters":["detail-view"],"review":"Answer in Chinese; edit permission, reorder gallery, first image as cover and save; distinguish gallery order from all-images selection."},
+  {"id":"T04","kind":"text","question":"How many images can I upload to one card, and how many can appear in its main gallery?","chapters":["detail-view","add-card"],"review":"30 uploaded, at most 6 selected; these are feature limits, not live inventory."},
+  {"id":"V01","kind":"visual","question":"In the Card Detail View toolbar, what does the pencil icon do, and where is the close button?","chapters":["detail-view"],"review":"Pencil edit at left, × close at right; edit owner/admin prerequisite; observed tool invocation and same-version screenshot evidence."},
+  {"id":"V02","kind":"visual","question":"Where are the Image layout dropdown and See all images button in the gallery?","chapters":["detail-view"],"review":"Dropdown top right in edit mode, See all bottom left; no inference from image-missing fallback."},
+  {"id":"V03","kind":"visual","question":"聊天窗口标题栏里的圆形双箭头图标是什么意思，在哪里可以找到它？","chapters":["chatbot"],"review":"Chinese explanation of sidebar/floating switch and chat header; screenshot tied to current chapter."},
+  {"id":"V04","kind":"visual","question":"What controls appear inside the card image gallery when I switch Image layout to Slideshow?","chapters":["detail-view"],"review":"Use slideshow state, arrows/pagination in image area, one image at a time; no unseen controls."},
+  {"id":"U01","kind":"unknown","question":"How do I configure the Atlas to email me a scheduled PDF export of every card each morning?","chapters":[],"review":"Clearly cannot confirm this unsupported workflow; no invented settings or steps."},
+  {"id":"L01","kind":"live","question":"Which public cards currently concern salmon habitat?","chapters":[],"review":"Live search_cards, public fields only; no use of static manual sample inventory."},
+  {"id":"L02","kind":"live","question":"How many cards exist in the Atlas right now?","chapters":[],"review":"Live summary count or explicitly unavailable; no fabricated or manual-example count."}
+]

@@ -1,152 +1,77 @@
+"""Import the published app manual, stage a version, verify it, then optionally activate.
+
+Legacy docs/*.md are deliberately never read. Default execution validates/stages;
+--activate switches only after every record and chapter search is ready.
 """
-index_docs.py — Index docs/ markdown files into Pinecone using Pinecone's
-hosted (integrated inference) embedding model.
-
-No local embedding model is needed: raw text is uploaded and Pinecone embeds
-it server-side with the model attached to the index.
-
-Required env vars:
-  PINECONE_API_KEY      — your Pinecone API key
-
-Optional env vars:
-  PINECONE_INDEX        — index name (default: "living-atlas-docs-hosted")
-  PINECONE_EMBED_MODEL  — hosted model (default: "multilingual-e5-large")
-
-Usage:
-  python scripts/index_docs.py
-"""
-
+import argparse
+import json
 import os
 import sys
 from pathlib import Path
 
-print("=== index_docs.py starting ===", flush=True)
-
-# Load .env from the repo root if present (local development)
-try:
-    from dotenv import load_dotenv
-    load_dotenv(Path(__file__).resolve().parents[1] / ".env")
-except Exception as _e:
-    print(f"[dotenv] Warning: {_e}", flush=True)
-
-MAX_CHARS = 400
-PINECONE_INDEX_NAME = os.environ.get("PINECONE_INDEX", "living-atlas-docs-hosted")
-PINECONE_EMBED_MODEL = os.environ.get("PINECONE_EMBED_MODEL", "multilingual-e5-large")
-NAMESPACE = "__default__"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from manual_knowledge import fetch_published_bundle, publish_bundle, validate_bundle
 
 
-# ---------------------------------------------------------------------------
-# Chunking: split by paragraphs, merge short consecutive ones up to max_chars
-# ---------------------------------------------------------------------------
-def chunk_markdown(text: str, max_chars: int = MAX_CHARS) -> list[str]:
-    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
-    chunks: list[str] = []
-    current = ""
-
-    for paragraph in paragraphs:
-        if not current:
-            current = paragraph
-            continue
-        candidate = f"{current}\n\n{paragraph}"
-        if len(candidate) <= max_chars:
-            current = candidate
-        else:
-            chunks.append(current)
-            current = paragraph
-
-    if current:
-        chunks.append(current)
-
-    return [c for c in chunks if c.strip()]
+def get_index():
+    from pinecone import Pinecone
+    key = os.environ.get("PINECONE_API_KEY", "").strip()
+    if not key:
+        raise RuntimeError("PINECONE_API_KEY is not configured")
+    pc = Pinecone(api_key=key)
+    host = os.environ.get("PINECONE_INDEX_HOST", "").strip()
+    if host:
+        return pc.Index(host=host)
+    name = (os.environ.get("PINECONE_INDEX") or "living-atlas-docs-hosted")
+    if name not in [item.name for item in pc.list_indexes()]:
+        pc.create_index_for_model(name=name, cloud="aws", region="us-east-1",
+            embed={"model": (os.environ.get("PINECONE_EMBED_MODEL") or "multilingual-e5-large"), "field_map": {"text": "content"}})
+    return pc.Index(name)
 
 
-# ---------------------------------------------------------------------------
-# Pinecone helpers
-# ---------------------------------------------------------------------------
-def get_pinecone_index(api_key: str):
-    """Connect to (or create) the integrated-embedding index and return it."""
-    try:
-        from pinecone import Pinecone
-    except ImportError as exc:
-        raise RuntimeError(
-            "pinecone is required. Install it with: pip install pinecone"
-        ) from exc
-
-    pc = Pinecone(api_key=api_key)
-
-    existing = [idx.name for idx in pc.list_indexes()]
-    if PINECONE_INDEX_NAME not in existing:
-        print(
-            f"Index '{PINECONE_INDEX_NAME}' not found — creating it "
-            f"with hosted model '{PINECONE_EMBED_MODEL}'..."
-        )
-        pc.create_index_for_model(
-            name=PINECONE_INDEX_NAME,
-            cloud="aws",
-            region="us-east-1",
-            embed={
-                "model": PINECONE_EMBED_MODEL,
-                "field_map": {"text": "content"},
-            },
-        )
-        print(f"✓ Index '{PINECONE_INDEX_NAME}' created.")
-    else:
-        print(f"✓ Using existing index '{PINECONE_INDEX_NAME}'.")
-
-    return pc.Index(PINECONE_INDEX_NAME)
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-def main() -> int:
-    api_key = os.environ.get("PINECONE_API_KEY", "").strip()
-    if not api_key:
-        print("Error: PINECONE_API_KEY environment variable is not set.")
-        return 1
-
-    docs_dir = Path(__file__).resolve().parents[1] / "docs"
-    md_files = sorted(docs_dir.glob("*.md"))
-
-    if not md_files:
-        print(f"No markdown files found in {docs_dir}")
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--bundle-dir", type=Path, help="Local generated release directory (staging only)")
+    parser.add_argument("--revision", help="Require this published app commit")
+    parser.add_argument("--activate", action="store_true")
+    parser.add_argument('--rollback', help='Explicitly restore a previously validated version')
+    args = parser.parse_args()
+    if args.rollback:
+        from manual_knowledge import rollback
+        if args.activate or args.bundle_dir or args.revision:
+            parser.error('Rollback cannot be combined with import options')
+        print(json.dumps(rollback(get_index(), args.rollback)))
         return 0
-
-    index = get_pinecone_index(api_key)
-
-    # Clear existing records for a clean re-index
-    print("Clearing existing records from index...")
-    try:
-        index.delete(delete_all=True, namespace=NAMESPACE)
-    except Exception as e:
-        print(f"  (Clear warning — continuing anyway: {e})")
-    print("✓ Index cleared.")
-
-    records = []
-    total_chunks = 0
-
-    for md_file in md_files:
-        text = md_file.read_text(encoding="utf-8")
-        chunks = chunk_markdown(text)
-
-        for i, chunk in enumerate(chunks):
-            records.append({
-                "_id": f"{md_file.stem}-{i}",
-                "content": chunk,
-                "source": md_file.name,
-            })
-            total_chunks += 1
-
-        print(f"✓ Prepared {md_file.name} — {len(chunks)} chunks")
-
-    # upsert_records accepts at most 96 text records per batch
-    BATCH_SIZE = 90
-    for i in range(0, len(records), BATCH_SIZE):
-        batch = records[i : i + BATCH_SIZE]
-        index.upsert_records(records=batch, namespace=NAMESPACE)
-        print(f"  Upserted batch {i // BATCH_SIZE + 1} ({len(batch)} records)")
-
-    print(f"\nDone. Total chunks indexed into Pinecone: {total_chunks}")
+    args.revision = args.revision or os.environ.get('EXPECTED_REVISION') or None
+    if args.revision and not __import__('re').fullmatch(r'[a-f0-9]{40}', args.revision):
+        parser.error('Expected revision must be a full commit SHA')
+    base = os.environ.get("MANUAL_BASE_URL", "").strip()
+    if args.bundle_dir and args.activate:
+        parser.error("Activation requires the published app bundle, not local files")
+    if args.bundle_dir:
+        manifest = json.loads((args.bundle_dir / "manifest.json").read_bytes())
+        bundle = validate_bundle(manifest, (args.bundle_dir / "manual.json").read_bytes())
+        if manifest.get('visuals'):
+            from manual_visuals import validate_catalog
+            bundle['_visual_catalog'] = validate_catalog(manifest['visuals'], (args.bundle_dir / manifest['visuals']['path']).read_bytes(), manifest['version'], manifest['revision'], bundle)
+    else:
+        import requests
+        session = requests.Session()
+        manifest, bundle = fetch_published_bundle(session, base, args.revision)
+    if os.environ.get('EXPECTED_VERSION') and manifest['version'] != os.environ['EXPECTED_VERSION']:
+        raise ValueError('Published version differs from dispatch')
+    if os.environ.get('EXPECTED_CHECKSUM') and manifest['files'][0]['sha256'] != os.environ['EXPECTED_CHECKSUM']:
+        raise ValueError('Published checksum differs from dispatch')
+    index = get_index()
+    # Check the production marker again immediately before switching: a queued old
+    # event cannot reactivate an outdated manual after a newer deployment.
+    def activation_check():
+        latest, _ = fetch_published_bundle(session, base, manifest["revision"])
+        if latest != manifest:
+            raise RuntimeError("Published app advanced during indexing; staged version not activated")
+    result = publish_bundle(index, manifest, bundle, base, activate=args.activate,
+        before_activate=activation_check if args.activate else None)
+    print(json.dumps(result))
     return 0
 
 
@@ -154,7 +79,5 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except Exception as exc:
-        import traceback
-        print(f"\nIndexing failed: {exc}")
-        traceback.print_exc()
+        print(f"Manual sync failed ({type(exc).__name__}): {exc}", file=sys.stderr)
         sys.exit(1)

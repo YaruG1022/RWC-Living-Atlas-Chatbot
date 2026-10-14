@@ -4,7 +4,8 @@ chat.py  —  /chat/ask endpoint
 The model answers by calling tools (chat_tools.py) rather than being handed
 everything up front:
 
-  search_documentation   Pinecone vector search over docs/*.md
+  search_documentation   Pinecone search over the published app manual
+  inspect_manual_visuals verified manual screenshots + a separate vision model
   search_cards           live public card records from the Atlas backend
   browse_arcgis_catalog  live state ArcGIS REST catalog + quick-action links
 
@@ -19,6 +20,7 @@ Generation: DeepSeek API (OpenAI-compatible), set DEEPSEEK_API.
 
 import json
 import os
+import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -45,7 +47,7 @@ MAX_TOOL_ROUNDS = 3
 # System prompt: gives the model context about the Living Atlas project
 # ---------------------------------------------------------------------------
 SYSTEM_PROMPT_BASE = """You are the RWC Living Atlas Helper, an AI assistant for the
-Regional Water Center (RWC) Living Atlas web application — an interactive map
+Rivers, Watersheds, Communities (RWC) Living Atlas web application — an interactive map
 that showcases environmental datasets, GIS layers, and research resources for
 the Pacific Northwest (Idaho, Oregon, and Washington).
 
@@ -59,7 +61,22 @@ contains. Call a tool even when the question is not in English; pass English key
 as the query and answer in the user's own language. If a tool reports that a service is
 unreachable, say so plainly rather than inventing an answer.
 
+VISUAL QUESTIONS: For icon appearance, button positions, layout or expanded gallery
+states, call inspect_manual_visuals after retrieving the relevant chapter. Use its
+verified screenshots and text. For text-only questions, do not call the visual tool.
+Screenshots depict manual examples, not current cards or real users. If images cannot
+be inspected, say so and use only sourced text; never guess an unseen visual detail.
+
 If, after using the tools, you still cannot answer, say so honestly.
+
+FEATURE INSTRUCTIONS: The published app user manual is the only feature authority.
+Use the retrieved passages, including prerequisites, complete steps and cautions.
+If the passages do not explain the requested action, say you cannot confirm it from
+the manual. Do not invent steps from historical documentation or general memory.
+When using a manual chapter, cite its exact ID as [manual:chapter-id]. These markers
+are resolved by the service into verified links. Never compose user-manual URLs.
+Do not cite a chapter that was not returned by search. Live tools remain the source
+for current records and inventory, not the sample values in the manual.
 
 For any countable or enumerable fact — how many cards or ArcGIS services exist, which
 categories or tags are available, which folders a state publishes — use LIVE ATLAS FACTS
@@ -93,16 +110,19 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     answer: str
+    sources: list[dict[str, Any]] = Field(default_factory=list)
+    # Machine-readable evaluation data; the widget displays only answer/sources.
+    metrics: dict[str, Any] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
 # Prompt assembly
 # ---------------------------------------------------------------------------
-def build_system_prompt(question: str) -> str:
+def build_system_prompt(question: str, ctx: ToolContext | None = None) -> str:
     """Base prompt plus the two unconditionally-injected context blocks."""
     sections = []
 
-    doc_context = search_documentation(question)
+    doc_context = search_documentation(question, ctx=ctx)
     if doc_context:
         sections.append("=== REFERENCE DOCUMENTATION (first-pass search) ===\n" + doc_context)
 
@@ -115,9 +135,9 @@ def build_system_prompt(question: str) -> str:
     return SYSTEM_PROMPT_BASE + "\n\n" + "\n\n".join(sections)
 
 
-def build_messages(payload: ChatRequest, question: str) -> list[dict[str, Any]]:
+def build_messages(payload: ChatRequest, question: str, ctx: ToolContext | None = None) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": build_system_prompt(question)}
+        {"role": "system", "content": build_system_prompt(question, ctx)}
     ]
 
     for msg in payload.history[-6:]:
@@ -128,6 +148,19 @@ def build_messages(payload: ChatRequest, question: str) -> list[dict[str, Any]]:
 
     messages.append({"role": "user", "content": question})
     return messages
+
+
+def resolve_manual_sources(answer: str, ctx: ToolContext):
+    import re
+    used = set(re.findall(r'\[manual:([a-z0-9-]+)\]', answer))
+    # Even if the provider omits markers, expose retrieved references with precise
+    # block/version metadata. The UI labels these as manual references, not proof of every claim.
+    sources = [source for source in ctx.manual_sources if not used or source['section_id'] in used]
+    answer = re.sub(r'\[manual:[^\]]*\]', '', answer).strip()
+    # Model-produced manual links never survive; the only links are the structured sources.
+    answer = re.sub(r'\[[^\]]*\]\([^\s)]*\/user-manual[^)]*\)', '', answer)
+    answer = re.sub(r'https?://[^\s<>]*\/user-manual[^\s<>]*', '', answer)
+    return answer, sources
 
 
 def append_navigation_links(answer: str, navigation_links: list[dict]) -> str:
@@ -185,6 +218,7 @@ def run_tool_loop(client: OpenAI, model: str, messages: list, ctx: ToolContext):
     """
     for round_index in range(MAX_TOOL_ROUNDS):
         response = _completion(client, model, messages, with_tools=True)
+        record_usage(response, model, ctx)
         message = response.choices[0].message
 
         tool_calls = getattr(message, "tool_calls", None)
@@ -205,7 +239,16 @@ def run_tool_loop(client: OpenAI, model: str, messages: list, ctx: ToolContext):
 
     # Budget spent and the model still wants tools — make it answer.
     print(f"[chat] Tool budget of {MAX_TOOL_ROUNDS} rounds exhausted; forcing an answer.")
-    return _completion(client, model, messages, with_tools=False)
+    response = _completion(client, model, messages, with_tools=False)
+    record_usage(response, model, ctx)
+    return response
+
+
+def record_usage(response, model, ctx):
+    usage = getattr(response, 'usage', None)
+    ctx.generation_usage.append({'model': model,
+        'prompt_tokens': getattr(usage, 'prompt_tokens', None),
+        'completion_tokens': getattr(usage, 'completion_tokens', None)})
 
 
 def _looks_like_missing_tool_support(exc: Exception) -> bool:
@@ -238,10 +281,12 @@ def ask(payload: ChatRequest):
         print("[chat] Warning: DEEPSEEK_API contained leading/trailing whitespace; sanitized automatically.")
 
     client = OpenAI(base_url="https://api.deepseek.com", api_key=api_key)
+    started = time.perf_counter()
     model = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 
     ctx = ToolContext()
-    messages = build_messages(payload, question)
+    ctx.user_question = question
+    messages = build_messages(payload, question, ctx)
 
     try:
         try:
@@ -253,12 +298,13 @@ def ask(payload: ChatRequest):
             # every tool's output up front and answer in one shot, so swapping
             # DEEPSEEK_MODEL can never take the chatbot down.
             print(f"[chat] Model '{model}' rejected tools ({exc}); falling back to eager context.")
-            fallback = build_messages(payload, question)
+            fallback = build_messages(payload, question, ctx)
             fallback[0]["content"] += (
                 "\n\n=== PRE-GATHERED CONTEXT (tools unavailable) ===\n"
                 + gather_all_context(question, ctx)
             )
             response = _completion(client, model, fallback, with_tools=False)
+            record_usage(response, model, ctx)
 
         answer = (response.choices[0].message.content or "").strip()
         if not answer:
@@ -269,7 +315,11 @@ def ask(payload: ChatRequest):
             return ChatResponse(
                 answer="Sorry — I couldn't finish generating an answer. Please try asking again."
             )
-        return ChatResponse(answer=append_navigation_links(answer, ctx.navigation_links))
+        answer, sources = resolve_manual_sources(answer, ctx)
+        return ChatResponse(answer=append_navigation_links(answer, ctx.navigation_links), sources=sources,
+            metrics={'duration_ms': round((time.perf_counter() - started) * 1000),
+                'generation': ctx.generation_usage, 'vision': ctx.visual_status or {'status': 'not-requested'},
+                'manual_version': (ctx.manual_pointer or {}).get('version')})
 
     except HTTPException:
         raise

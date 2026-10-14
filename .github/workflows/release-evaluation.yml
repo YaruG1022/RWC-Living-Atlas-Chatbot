@@ -1,0 +1,74 @@
+name: Evaluate published manual answers
+on:
+  workflow_call:
+    inputs:
+      ids:
+        type: string
+        default: 'T01,T03,V01'
+      require_vision:
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      ids:
+        description: 'Case IDs (empty runs all 11 cases; sequential, billed provider requests)'
+        default: 'T01,T03,V01'
+        required: false
+      require_vision:
+        description: 'Fail visual cases unless versioned screenshots were actually inspected'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Evaluate current release through the real service
+        env:
+          MANUAL_BASE_URL: ${{ vars.MANUAL_BASE_URL || 'https://rwc-living-atlas.netlify.app' }}
+          CHATBOT_BASE_URL: ${{ vars.CHATBOT_BASE_URL || 'https://rwc-living-atlas-chatbot.onrender.com' }}
+          CASE_IDS: ${{ inputs.ids }}
+          REQUIRE_VISION: ${{ inputs.require_vision }}
+          EXPECTED_BOT_REVISION: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import os, subprocess, requests, time
+          from manual_knowledge import validate_manifest
+          # A successful index import can precede Render's automatic deployment.
+          # Wait for this actual service revision before evaluating its answers.
+          for attempt in range(30):
+              try:
+                  health_response = requests.get(os.environ['CHATBOT_BASE_URL'] + '/health', timeout=15, allow_redirects=False)
+                  health_response.raise_for_status()
+                  health = health_response.json()
+                  if health.get('revision') == os.environ['EXPECTED_BOT_REVISION'] and health.get('manual_protocol') == 'text-v1-visual-v1':
+                      break
+              except (requests.RequestException, ValueError):
+                  pass
+              if attempt == 29:
+                  raise RuntimeError('Expected Render service revision did not become healthy')
+              time.sleep(10)
+          response = requests.get(os.environ['MANUAL_BASE_URL'] + '/manual/current.json', timeout=30, allow_redirects=False)
+          response.raise_for_status()
+          manifest = response.json()
+          validate_manifest(manifest)
+          command = ['python', 'scripts/evaluate_manual.py', '--base-url', os.environ['CHATBOT_BASE_URL'], '--expected-version', manifest['version'], '--output', 'evaluation-result.json']
+          if os.environ.get('CASE_IDS'):
+              command += ['--ids', os.environ['CASE_IDS']]
+          if os.environ.get('REQUIRE_VISION') == 'true':
+              command += ['--require-vision']
+          subprocess.run(command, check=True)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: manual-answer-evaluation
+          path: evaluation-result.json
+          if-no-files-found: warn
