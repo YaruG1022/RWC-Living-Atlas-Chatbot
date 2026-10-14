@@ -53,6 +53,15 @@ def validate_catalog(descriptor, raw, version, revision, bundle=None):
                 or not isinstance(entry.get('caption'), str) or not 0 < len(entry['caption']) <= 2000
                 or any(not isinstance(entry.get(field), list) or any(not ID_RE.fullmatch(value) for value in entry[field]) for field in ['blockIds', 'stepIds'])):
             raise ValueError('Invalid screenshot metadata')
+        controls = entry.get('controls', [])
+        if not isinstance(controls, list) or len(controls) > 120:
+            raise ValueError('Invalid rendered control inventory')
+        for control in controls:
+            if (control.get('role') not in {'button', 'combobox'} or not isinstance(control.get('label'), str)
+                    or not 0 < len(control['label']) <= 160 or not isinstance(control.get('icon'), str)
+                    or not isinstance(control.get('bounds'), list) or len(control['bounds']) != 4
+                    or any(type(value) not in {int, float} for value in control['bounds'])):
+                raise ValueError('Invalid rendered control metadata')
         if sections is not None:
             section = sections.get(entry['sectionId'])
             if not section or any(block not in {b['id'] for b in section['blocks']} for block in entry['blockIds']):
@@ -165,7 +174,8 @@ def describe_visuals(question, passages, sources, pointer, state='default', quer
                 except (requests.RequestException, ValueError):
                     continue
                 accepted.append(entry)
-                content.extend([{'type': 'text', 'text': f'Screenshot {entry["id"]}: chapter {entry["sectionId"]}, state {entry["state"]}, {entry["caption"]}. These are manual examples, not live data.'},
+                labels = [{'label': control['label'], 'icon': control['icon'], 'bounds': control['bounds']} for control in entry.get('controls', [])]
+                content.extend([{'type': 'text', 'text': f'Screenshot {entry["id"]}: chapter {entry["sectionId"]}, state {entry["state"]}, {entry["caption"]}. These are manual examples, not live data. Rendered controls (actual aria-label/title/text and positions in this crop): {json.dumps(labels)}. Use these control names; do not invent a close/navigation action for an image-delete control.'},
                     {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,' + base64.b64encode(raw).decode(), 'detail': 'high'}}])
         if not accepted:
             return None, {'status': 'unavailable', 'reason': 'images-unavailable'}
@@ -180,6 +190,7 @@ def describe_visuals(question, passages, sources, pointer, state='default', quer
         usage = response.usage
         metrics = {'status': 'used', 'model': model, 'image_count': len(accepted),
             'image_ids': [entry['id'] for entry in accepted], 'version': pointer['version'],
+            'control_labels': list(dict.fromkeys(control['label'] for entry in accepted for control in entry.get('controls', []))),
             'duration_ms': round((time.perf_counter() - started) * 1000),
             'prompt_tokens': getattr(usage, 'prompt_tokens', None), 'completion_tokens': getattr(usage, 'completion_tokens', None)}
         logger.info('manual_vision %s', json.dumps(metrics))
@@ -188,3 +199,21 @@ def describe_visuals(question, passages, sources, pointer, state='default', quer
         # No provider response, credential, image bytes or request body in logs.
         logger.warning('manual_vision failed type=%s', type(exc).__name__)
         return None, {'status': 'unavailable', 'reason': 'vision-service-failed'}
+
+
+def guard_gallery_close_claim(answer, visual_status):
+    """Prevent the observed ×=slideshow-close error using actual rendered labels.
+
+    A future real close control disables this guard. No UI action is inferred
+    from an icon's shape or a separately maintained feature description.
+    """
+    labels = visual_status.get('control_labels', [])
+    if not any(re.match(r'Delete image\b', label, re.I) for label in labels) or any(re.search(r'close|exit', label, re.I) for label in labels):
+        return answer
+    lines = []
+    for line in answer.splitlines():
+        false_close = re.search(r'(?:close.{0,45}(?:exit|clos)\w*.{0,30}slide\s?show|(?:×|\bx\b).{0,35}(?:exit|clos)\w*.{0,30}slide\s?show)', line, re.I)
+        negated = false_close and re.search(r'\b(?:not|no|never|doesn.t|isn.t)\b', line[:false_close.start()], re.I)
+        if not false_close or negated:
+            lines.append(line)
+    return '\n'.join(lines)

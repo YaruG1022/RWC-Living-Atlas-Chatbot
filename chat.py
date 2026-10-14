@@ -316,6 +316,9 @@ def ask(payload: ChatRequest):
             record_usage(response, model, ctx)
 
         answer = (response.choices[0].message.content or "").strip()
+        if ctx.visual_status.get('status') == 'used':
+            from manual_visuals import guard_gallery_close_claim
+            answer = guard_gallery_close_claim(answer, ctx.visual_status)
         if not answer:
             print(
                 "[chat] Warning: model returned empty content "

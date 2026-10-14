@@ -181,3 +181,20 @@ def test_procedural_question_cannot_be_upgraded_to_a_billed_visual_call(monkeypa
     assert chat_tools.execute_tool('inspect_manual_visuals', {'query': 'gallery reorder icons'}, ctx) == 'Verified gallery reorder steps'
     assert ctx.visual_status == {'status': 'not-requested'}
     describe.assert_not_called()
+
+
+def test_rendered_delete_label_blocks_false_slideshow_close_but_allows_real_close():
+    answer = '- Previous/next arrows navigate images.\n- **Close (×)** — exits the slideshow view.\n- The × deletes the image.'
+    labels = {'control_labels': ['Previous gallery image', 'Next gallery image', 'Delete image 1', 'Image layout']}
+    result = visuals.guard_gallery_close_claim(answer, labels)
+    assert 'exits the slideshow' not in result and 'navigate images' in result and 'deletes the image' in result
+    assert visuals.guard_gallery_close_claim(answer, {'control_labels': ['Delete image 1', 'Close slideshow']}) == answer
+
+
+def test_catalog_rejects_invalid_control_observations():
+    manifest, bundle, catalog, _ = visual_package()
+    catalog['entries'][0]['controls'] = [{'role': 'button', 'label': 'Delete image 1', 'icon': 'xmark', 'bounds': [1, 2, 3]}]
+    raw = json.dumps(catalog).encode(); digest = hashlib.sha256(raw).hexdigest()
+    descriptor = {**manifest['visuals'], 'path': f'visuals/{digest}.json', 'sha256': digest, 'bytes': len(raw)}
+    with pytest.raises(ValueError, match='control metadata'):
+        visuals.validate_catalog(descriptor, raw, manifest['version'], manifest['revision'], bundle)
