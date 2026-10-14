@@ -63,7 +63,7 @@ class ToolContext:
             existing = next((item for item in self.manual_sources if
                 (item['section_id'], item['version']) == (source['section_id'], source['version'])), None)
             if existing:
-                for field in ['block_ids', 'step_ids', 'image_ids']:
+                for field in ['block_ids', 'operation_block_ids', 'step_ids', 'image_ids']:
                     existing[field] = list(dict.fromkeys(existing.get(field, []) + source.get(field, [])))
             else:
                 self.manual_sources.append(dict(source))

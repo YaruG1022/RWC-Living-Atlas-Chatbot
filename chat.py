@@ -21,6 +21,7 @@ Generation: DeepSeek API (OpenAI-compatible), set DEEPSEEK_API.
 import json
 import os
 import time
+import re
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -179,7 +180,7 @@ def append_navigation_links(answer: str, navigation_links: list[dict]) -> str:
 # ---------------------------------------------------------------------------
 # Tool-calling loop
 # ---------------------------------------------------------------------------
-def _completion(client: OpenAI, model: str, messages: list, with_tools: bool):
+def _completion(client: OpenAI, model: str, messages: list, with_tools: bool, force_visual=False):
     kwargs: dict[str, Any] = {
         "model": model,
         "messages": messages,
@@ -194,7 +195,7 @@ def _completion(client: OpenAI, model: str, messages: list, with_tools: bool):
     }
     if with_tools:
         kwargs["tools"] = tool_schemas()
-        kwargs["tool_choice"] = "auto"
+        kwargs["tool_choice"] = ({'type': 'function', 'function': {'name': 'inspect_manual_visuals'}} if force_visual else 'auto')
     return client.chat.completions.create(**kwargs)
 
 
@@ -217,7 +218,11 @@ def run_tool_loop(client: OpenAI, model: str, messages: list, ctx: ToolContext):
     model has no choice but to answer with what it has gathered.
     """
     for round_index in range(MAX_TOOL_ROUNDS):
-        response = _completion(client, model, messages, with_tools=True)
+        # Real smoke testing found direct answers to explicit icon/position questions
+        # despite the visual instruction. A narrow guard forces their first tool;
+        # text questions and other phrasing keep the existing model routing.
+        force_visual = round_index == 0 and requires_visual_evidence(ctx.user_question)
+        response = _completion(client, model, messages, with_tools=True, force_visual=force_visual)
         record_usage(response, model, ctx)
         message = response.choices[0].message
 
@@ -249,6 +254,10 @@ def record_usage(response, model, ctx):
     ctx.generation_usage.append({'model': model,
         'prompt_tokens': getattr(usage, 'prompt_tokens', None),
         'completion_tokens': getattr(usage, 'completion_tokens', None)})
+
+
+def requires_visual_evidence(question):
+    return bool(re.search(r'\b(?:icons?|layout|look like)\b|\bwhere\b.{0,80}\b(?:button|dropdown|control|toolbar)\b|图标|布局|按钮.{0,20}(?:位置|在哪|哪里)|(?:哪里|哪儿|在哪).{0,20}(?:按钮|控件)', question, re.IGNORECASE))
 
 
 def _looks_like_missing_tool_support(exc: Exception) -> bool:

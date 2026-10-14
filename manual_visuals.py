@@ -92,7 +92,7 @@ def select_visuals(catalog, sources, state='default'):
     for source in sources:
         section = source['section_id']
         ranks.setdefault(section, len(ranks))
-        blocks.setdefault(section, set()).update(source.get('block_ids', []))
+        blocks.setdefault(section, set()).update(source.get('operation_block_ids', source.get('block_ids', [])))
     candidates = [entry for entry in catalog['entries'] if entry['sectionId'] in ranks and entry['state'] in {state, 'chapter-overview'}]
     def rank(entry):
         overlap = len(blocks[entry['sectionId']].intersection(entry['blockIds']))

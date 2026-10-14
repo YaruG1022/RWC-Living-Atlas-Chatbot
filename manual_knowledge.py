@@ -14,6 +14,7 @@ ACTIVE_ID = "active-manual"
 VERSION_RE = re.compile(r"^[a-f0-9]{40}-[a-f0-9]{12}$")
 ID_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 MAX_PACKAGE_BYTES = 5 * 1024 * 1024
+RECORD_SCHEMA = 2
 
 
 def response_dict(response):
@@ -26,10 +27,12 @@ def response_dict(response):
     return dict(response)
 
 
-def namespace_for(version):
+def namespace_for(version, record_schema=RECORD_SCHEMA):
     if not isinstance(version, str) or not VERSION_RE.fullmatch(version):
         raise ValueError("Invalid manual version")
-    return f"manual-{version}"
+    if record_schema not in {1, 2}:
+        raise ValueError('Unknown manual record schema')
+    return f"manual-{version}" + ('-v2' if record_schema == 2 else '')
 
 
 def validate_manifest(manifest):
@@ -97,6 +100,9 @@ def validate_bundle(manifest, raw):
             raise ValueError("Missing title or invalid manual link")
         if not section.get("blocks"):
             raise ValueError("Empty chapter")
+        context_ids = section.get('contextBlockIds', [])
+        if not isinstance(context_ids, list) or len(context_ids) != len(set(context_ids)) or any(value not in {block['id'] for block in section['blocks']} for value in context_ids):
+            raise ValueError('Invalid chapter context references')
         for block in section["blocks"]:
             if not ID_RE.fullmatch(block.get("id", "")) or block["id"] in seen:
                 raise ValueError("Duplicate/invalid block ID")
@@ -170,15 +176,20 @@ def build_records(manifest, bundle):
         if current:
             operations.append(current)
         for position, blocks in enumerate(operations):
+            # Shared prerequisites/cautions are referenced once in the manual and
+            # included after each operation so retrieval cannot lose them.
+            context = [block for block in section['blocks'] if block['id'] in section.get('contextBlockIds', []) and block not in blocks]
+            all_blocks = blocks + context
             visual_ids = [entry['id'] for entry in bundle.get('_visual_catalog', {}).get('entries', [])
                 if entry['sectionId'] == section['id'] and (entry['state'] == 'chapter-overview'
                 or set(entry['blockIds']).intersection(block['id'] for block in blocks))]
             records.append({"_id": f"{section['id']}-{position:03d}",
-                "content": f"{section['title']}\n{section['summary']}\n\n" + "\n\n".join(b["text"] for b in blocks),
+                "content": f"{section['title']}\n{section['summary']}\n\n" + "\n\n".join(b["text"] for b in blocks) + ('\n\nShared prerequisites and cautions:\n' + '\n\n'.join(b['text'] for b in context) if context else ''),
                 "section_id": section["id"], "title": section["title"], "manual_path": section["manualPath"],
                 "version": manifest["version"], "revision": manifest["revision"],
-                "block_ids": [b["id"] for b in blocks],
-                "step_ids": [step for b in blocks for step in b.get("stepIds", [])],
+                "block_ids": [b["id"] for b in all_blocks],
+                "operation_block_ids": [b['id'] for b in blocks],
+                "step_ids": [step for b in all_blocks for step in b.get("stepIds", [])],
                 "image_ids": visual_ids or [i["id"] for i in section["images"]],
                 "example_ids": [i["id"] for i in section["examples"]]})
     return records
@@ -194,7 +205,7 @@ def read_active(index):
     pointer = dict(metadata) if metadata else None
     if not pointer:
         return None
-    namespace = namespace_for(pointer.get("version"))
+    namespace = namespace_for(pointer.get("version"), pointer.get('record_schema', 1))
     if pointer.get("namespace") != namespace:
         raise ValueError("Invalid active manual pointer")
     pointer["base_url"] = validate_base_url(pointer["base_url"])
@@ -239,7 +250,7 @@ def publish_bundle(index, manifest, bundle, base, activate=False, attempts=30, s
     existing = read_active(index)
     visuals = manifest.get('visuals')
     visuals_json = json.dumps(visuals, sort_keys=True) if visuals else ''
-    if existing and existing["version"] == manifest["version"] and existing["base_url"] == base and existing.get('visuals_json', '') == visuals_json:
+    if existing and existing["version"] == manifest["version"] and existing["base_url"] == base and existing.get('visuals_json', '') == visuals_json and existing.get('record_schema', 1) == RECORD_SCHEMA:
         return {"status": "already-active", "version": manifest["version"], "records": len(records)}
     # Upsert is idempotent; a failed partial write is resumed without deleting anything.
     for start in range(0, len(records), 90):
@@ -252,6 +263,7 @@ def publish_bundle(index, manifest, bundle, base, activate=False, attempts=30, s
         pointer = {"_id": ACTIVE_ID, "content": "Validated active Living Atlas manual release",
             "namespace": namespace, "version": manifest["version"], "revision": manifest["revision"],
             "base_url": base, "previous_version": previous, "record_count": len(records)}
+        pointer['record_schema'] = RECORD_SCHEMA
         if visuals:
             pointer['visuals_json'] = visuals_json
         # Store the validated release before the active pointer so rollback has a durable target.
@@ -264,8 +276,8 @@ def publish_bundle(index, manifest, bundle, base, activate=False, attempts=30, s
 
 def rollback(index, version):
     """Explicit operator recovery; never run as automatic cleanup or on every restart."""
-    namespace = namespace_for(version)
     release = fetched_metadata(index, CONTROL_NAMESPACE, [f"release-{version}"]).get(f"release-{version}")
+    namespace = namespace_for(version, (release or {}).get('record_schema', 1))
     if not release or release.get("namespace") != namespace:
         raise ValueError("No validated rollback release")
     validate_base_url(release["base_url"])
@@ -286,6 +298,7 @@ def rollback(index, version):
         "namespace": namespace, "version": version, "revision": release["revision"],
         "base_url": release["base_url"], "record_count": len(records),
         "previous_version": (read_active(index) or {}).get("version", "")}
+    pointer['record_schema'] = release.get('record_schema', 1)
     if release.get('visuals_json'):
         pointer['visuals_json'] = release['visuals_json']
     index.upsert_records(namespace=CONTROL_NAMESPACE, records=[pointer])
@@ -294,7 +307,7 @@ def rollback(index, version):
 
 def search_manual(index, query, pointer, top_k=3):
     result = response_dict(index.search(namespace=pointer["namespace"], query={"inputs": {"text": query}, "top_k": top_k},
-        fields=["content", "section_id", "title", "manual_path", "version", "revision", "block_ids", "step_ids", "image_ids"]))
+        fields=["content", "section_id", "title", "manual_path", "version", "revision", "block_ids", "operation_block_ids", "step_ids", "image_ids"]))
     passages, sources = [], []
     for hit in result.get("result", {}).get("hits", []):
         fields = hit.get("fields", {})
@@ -306,5 +319,6 @@ def search_manual(index, query, pointer, top_k=3):
         passages.append(f"[{section}] {fields['content']}")
         sources.append({"section_id": section, "title": fields.get("title", section), "url": url,
             "version": pointer["version"], "revision": pointer["revision"], "block_ids": fields.get("block_ids", []),
+            "operation_block_ids": fields.get('operation_block_ids', fields.get('block_ids', [])),
             "step_ids": fields.get("step_ids", []), "image_ids": fields.get("image_ids", [])})
     return passages, sources

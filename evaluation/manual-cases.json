@@ -1,5 +1,5 @@
 [
-  {"id":"T01","kind":"text","question":"Which card creation fields are required, and is Category mandatory?","chapters":["add-card"],"review":"Author Name/Title/Short Description/location requirements; Category optional; no historical Category-required claim."},
+  {"id":"T01","kind":"text","question":"Which card creation fields are required, and is Category mandatory?","chapters":["add-card"],"review":"Author Name/Email/Title and valid map placement required; Description optional; Category optional; no historical Category-required claim."},
   {"id":"T02","kind":"text","question":"How do I create a card from a polygon drawn on the map? Include the prerequisites and complete steps.","chapters":["polygon-tools","add-card"],"review":"Draw/finish polygon, create card, login and required form fields, submit; no truncated sequence."},
   {"id":"T03","kind":"text","question":"如何修改卡片的图片顺序，并让第二张图片变成封面？","chapters":["detail-view"],"review":"Answer in Chinese; edit permission, reorder gallery, first image as cover and save; distinguish gallery order from all-images selection."},
   {"id":"T04","kind":"text","question":"How many images can I upload to one card, and how many can appear in its main gallery?","chapters":["detail-view","add-card"],"review":"30 uploaded, at most 6 selected; these are feature limits, not live inventory."},
