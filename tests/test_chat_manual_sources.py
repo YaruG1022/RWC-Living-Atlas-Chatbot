@@ -84,3 +84,10 @@ def test_provider_must_call_visual_tool_for_explicit_visual_requests():
     assert client.chat.completions.create.call_args.kwargs['tool_choice'] == {'type': 'function', 'function': {'name': 'inspect_manual_visuals'}}
     chat._completion(client, 'model', [], True)
     assert client.chat.completions.create.call_args.kwargs['tool_choice'] == 'auto'
+
+
+def test_text_instruction_completion_does_not_offer_the_visual_tool():
+    client = Mock()
+    chat._completion(client, 'model', [], True, allow_visual=False)
+    names = {tool['function']['name'] for tool in client.chat.completions.create.call_args.kwargs['tools']}
+    assert names == {'search_documentation', 'search_cards', 'browse_arcgis_catalog'}
