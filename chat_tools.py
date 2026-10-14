@@ -57,6 +57,7 @@ class ToolContext:
     user_question: str = ''
     last_manual_sources: list[dict] = field(default_factory=list)
     generation_usage: list[dict] = field(default_factory=list)
+    manual_passages: list[str] = field(default_factory=list)
 
     def add_manual_sources(self, sources):
         for source in sources:
@@ -121,6 +122,7 @@ def search_documentation(query: str, top_k: int = 3, ctx: ToolContext | None = N
             return "The app user manual has not been activated yet. No legacy documentation was used. Do not guess feature instructions."
         passages, sources = search_manual(index, query, ctx.manual_pointer, top_k)
         ctx.last_manual_sources = sources
+        ctx.manual_passages = list(dict.fromkeys(ctx.manual_passages + passages))
         ctx.add_manual_sources(sources)
         if not passages:
             return "No app manual passages matched. Say the manual does not provide enough information."
@@ -171,7 +173,7 @@ def inspect_manual_visuals(query: str, ctx: ToolContext, state: str = 'default')
         ctx.visual_result = passages
         return passages
     from manual_visuals import describe_visuals
-    answer, ctx.visual_status = describe_visuals(ctx.user_question or query, passages, ctx.last_manual_sources, ctx.manual_pointer, state)
+    answer, ctx.visual_status = describe_visuals(ctx.user_question or query, '\n\n---\n\n'.join(ctx.manual_passages), ctx.manual_sources, ctx.manual_pointer, state, query=query)
     if answer:
         ids = set(ctx.visual_status['image_ids'])
         for source in ctx.manual_sources:
