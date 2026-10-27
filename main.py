@@ -6,6 +6,7 @@ Serves the /chat/ask endpoint consumed by the Living Atlas ChatbotWidget.
 """
 
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -43,10 +44,21 @@ app.add_middleware(
 app.include_router(chat_router)
 
 
+_REVISION_FILE = Path(__file__).with_name('deployment-revision.txt')
+
+
+def deployment_revision():
+    try:
+        revision = _REVISION_FILE.read_text(encoding='utf-8').strip()
+    except OSError:
+        revision = ''
+    return revision or os.environ.get('RENDER_GIT_COMMIT')
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "manual_protocol": "text-v1-visual-v1",
-        "revision": os.environ.get('RENDER_GIT_COMMIT'),
+        "revision": deployment_revision(),
         "vision_configured": bool(os.environ.get('VISION_API_KEY', '').strip() and os.environ.get('VISION_MODEL', '').strip())}
 
 
