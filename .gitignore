@@ -1,6 +1,7 @@
 # Environment / secrets
 .env
 *.pem
+deployment-revision.txt
 
 # Python
 __pycache__/
