@@ -15,6 +15,7 @@ load_dotenv()
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from card_description import card_description_router
 from chat import chat_router
 
 app = FastAPI(title="RWC Living Atlas Helper Chatbot")
@@ -42,6 +43,7 @@ app.add_middleware(
 )
 
 app.include_router(chat_router)
+app.include_router(card_description_router)
 
 
 _REVISION_FILE = Path(__file__).with_name('deployment-revision.txt')

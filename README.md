@@ -32,6 +32,12 @@ Response: `{ "answer": "...", "sources": [{ "section_id": "add-card", "title": "
 
 The widget remains compatible with an older response containing only `answer`, but the deployed service must be upgraded to stop consulting legacy knowledge. Before the first manual is activated, the new service reports that feature knowledge is unavailable; it never falls back to the old docs namespace. Deploy the package and activate its first index before switching traffic to the upgraded service.
 
+## Card description generation
+
+The Atlas backend calls `POST /internal/cards/description` with `X-Atlas-Description-Token` after authenticating the editor and preparing the project evidence. Set the same randomly generated `ATLAS_DESCRIPTION_TOKEN` of at least 32 characters on both services. Keep the token in the two backend environments.
+
+The request contains a project `title`, `sources` with `label` and extracted `text`, and `images` with `label` and a JPEG `data_url`. It returns a plain-text `description` of up to 2,000 editor characters. The helper accepts up to 24 text sources (60,000 characters total) and eight JPEGs (2 MiB each, 8 MiB total). It sends text-only input to the existing `DEEPSEEK_API` / `DEEPSEEK_MODEL` and input with pictures to `VISION_API_KEY` / `VISION_MODEL` / `VISION_BASE_URL`. The request uses a single model call, with no chat tools or retrieval from the user manual. Model configuration, user files and source content stay out of application logs.
+
 ## Repository configuration
 
 In the **app repository**, configure:
