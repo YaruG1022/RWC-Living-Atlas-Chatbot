@@ -63,6 +63,7 @@ def test_use_existing_provider_without_tools(provider, images):
             api_key='mock-vision-key', base_url='https://vision.example.com/v1', timeout=25, max_retries=0,
         )
         assert options['model'] == 'vision-test-model'
+        assert 'extra_body' not in options
         assert SOURCE['text'] in prompt[0]['text']
         assert any(part.get('image_url', {}).get('url') == IMAGE['data_url'] for part in prompt)
     else:
@@ -72,6 +73,18 @@ def test_use_existing_provider_without_tools(provider, images):
         assert options['model'] == 'text-test-model'
         assert options['extra_body'] == {'thinking': {'type': 'disabled'}}
         assert SOURCE['text'] in prompt
+
+
+@pytest.mark.parametrize(('base_url', 'expected'), [
+    ('https://api.deepseek.com', {'thinking': {'type': 'disabled'}}),
+    ('https://api.deepseek.com.example.org', None),
+])
+def test_vision_disables_thinking_only_on_deepseek(provider, monkeypatch, base_url, expected):
+    monkeypatch.setenv('VISION_BASE_URL', base_url)
+    response = request_draft({'sources': [SOURCE], 'images': [IMAGE]})
+
+    assert response.status_code == 200
+    assert provider[1].call_args.kwargs.get('extra_body') == expected
 
 
 @pytest.mark.parametrize(('payload', 'status_code'), [

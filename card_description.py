@@ -111,6 +111,8 @@ def generate_description(payload: DescriptionPayload = Depends(read_description_
             valid_url = False
         if not key or not model or not valid_url:
             raise HTTPException(503, 'Card description generation from images is not configured.')
+        if parsed.hostname == 'api.deepseek.com':
+            options['extra_body'] = {'thinking': {'type': 'disabled'}}
         content = [{'type': 'text', 'text': evidence}]
         for image in payload.images:
             content.extend([
