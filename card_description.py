@@ -19,6 +19,7 @@ MAX_IMAGE_BYTES = 2 * 1024 * 1024
 MAX_TOTAL_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_REQUEST_BYTES = 12 * 1024 * 1024
 JPEG_PREFIX = 'data:image/jpeg;base64,'
+DEEPSEEK_BASE_URL = 'https://api.deepseek.com'
 
 SYSTEM_PROMPT = (
     'Write a short, factual project description for the RWC Living Atlas in plain text. '
@@ -100,9 +101,14 @@ def generate_description(payload: DescriptionPayload = Depends(read_description_
 
     options = {}
     if payload.images:
-        key = os.environ.get('VISION_API_KEY', '').strip()
-        model = os.environ.get('VISION_MODEL', '').strip()
-        base_url = os.environ.get('VISION_BASE_URL', 'https://api.openai.com/v1').strip()
+        if os.environ.get('ATLAS_DESCRIPTION_USE_DEEPSEEK_VISION', '').strip() == '1':
+            key = os.environ.get('DEEPSEEK_API', '').strip()
+            model = 'deepseek-flash'
+            base_url = DEEPSEEK_BASE_URL
+        else:
+            key = os.environ.get('VISION_API_KEY', '').strip()
+            model = os.environ.get('VISION_MODEL', '').strip()
+            base_url = os.environ.get('VISION_BASE_URL', 'https://api.openai.com/v1').strip()
         try:
             parsed = urlsplit(base_url)
             valid_url = (parsed.scheme == 'https' and parsed.hostname and parsed.username is None
@@ -122,7 +128,7 @@ def generate_description(payload: DescriptionPayload = Depends(read_description_
     else:
         key = os.environ.get('DEEPSEEK_API', '').strip()
         model = os.environ.get('DEEPSEEK_MODEL', 'deepseek-v4-flash').strip() or 'deepseek-v4-flash'
-        base_url = 'https://api.deepseek.com'
+        base_url = DEEPSEEK_BASE_URL
         if not key:
             raise HTTPException(503, 'Card description generation from text is not configured.')
         content = evidence

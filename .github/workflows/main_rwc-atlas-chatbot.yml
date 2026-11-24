@@ -70,7 +70,7 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_C395174EC64D4437B9419E88374B612B }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_C7F4BD46269B40AE9C54BF3F914B726D }}
 
-      - name: Configure Atlas description service authentication
+      - name: Configure Atlas card descriptions
         env:
           ATLAS_DESCRIPTION_TOKEN: ${{ secrets.ATLAS_DESCRIPTION_TOKEN }}
         shell: bash
@@ -93,9 +93,12 @@ jobs:
           fi
           current_token="$(az webapp config appsettings list --name "$app_name" --resource-group "$resource_group" \
             --query "[?name=='ATLAS_DESCRIPTION_TOKEN'].value | [0]" --output tsv --only-show-errors)"
-          if [[ "$current_token" != "$ATLAS_DESCRIPTION_TOKEN" ]]; then
+          current_vision="$(az webapp config appsettings list --name "$app_name" --resource-group "$resource_group" \
+            --query "[?name=='ATLAS_DESCRIPTION_USE_DEEPSEEK_VISION'].value | [0]" --output tsv --only-show-errors)"
+          if [[ "$current_token" != "$ATLAS_DESCRIPTION_TOKEN" || "$current_vision" != '1' ]]; then
             az webapp config appsettings set --name "$app_name" --resource-group "$resource_group" \
-              --settings "ATLAS_DESCRIPTION_TOKEN=$ATLAS_DESCRIPTION_TOKEN" --output none --only-show-errors
+              --settings "ATLAS_DESCRIPTION_TOKEN=$ATLAS_DESCRIPTION_TOKEN" ATLAS_DESCRIPTION_USE_DEEPSEEK_VISION=1 \
+              --output none --only-show-errors
           fi
 
       - name: 'Deploy to Azure Web App'
