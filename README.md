@@ -36,7 +36,9 @@ The widget remains compatible with an older response containing only `answer`, b
 
 The Atlas backend calls `POST /internal/cards/description` with `X-Atlas-Description-Token` after authenticating the editor and preparing the project evidence. Set the same randomly generated `ATLAS_DESCRIPTION_TOKEN` of at least 32 characters on both services. Keep the token in the two backend environments.
 
-The request contains a project `title`, `sources` with `label` and extracted `text`, and `images` with `label` and a JPEG `data_url`. It returns a plain-text `description` of up to 2,000 editor characters. The helper accepts up to 24 text sources (60,000 characters total) and eight JPEGs (2 MiB each, 8 MiB total). It sends text-only input to the existing `DEEPSEEK_API` / `DEEPSEEK_MODEL` and input with pictures to `VISION_API_KEY` / `VISION_MODEL` / `VISION_BASE_URL`. The request uses a single model call, with no chat tools or retrieval from the user manual. Model configuration, user files and source content stay out of application logs.
+The request contains a project `title`, `sources` with `label` and extracted `text`, and `images` with `label` and a JPEG `data_url`. It returns a plain-text `description` of up to 2,000 editor characters. The helper accepts up to 24 text sources (60,000 characters total) and eight JPEGs (2 MiB each, 8 MiB total). The request uses a single model call, with no chat tools or retrieval from the user manual. Model configuration, user files and source content stay out of application logs.
+
+Text-only drafts use `DEEPSEEK_API` and `DEEPSEEK_MODEL`. By default, image drafts use `VISION_API_KEY`, `VISION_MODEL`, and `VISION_BASE_URL`. Set `ATLAS_DESCRIPTION_USE_DEEPSEEK_VISION=1` to route card image drafts to `deepseek-flash` with the existing `DEEPSEEK_API` key. The Azure deployment sets this switch when the Atlas description token is configured. Chat and manual vision keep their own provider settings.
 
 ## Repository configuration
 

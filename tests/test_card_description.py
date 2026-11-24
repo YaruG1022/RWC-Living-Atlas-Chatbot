@@ -17,6 +17,7 @@ HEADERS = {'X-Atlas-Description-Token': 'local-test-token-32-characters-long'}
 @pytest.fixture
 def provider(monkeypatch):
     monkeypatch.setenv('ATLAS_DESCRIPTION_TOKEN', HEADERS['X-Atlas-Description-Token'])
+    monkeypatch.delenv('ATLAS_DESCRIPTION_USE_DEEPSEEK_VISION', raising=False)
     monkeypatch.setenv('DEEPSEEK_API', 'mock-text-key')
     monkeypatch.setenv('DEEPSEEK_MODEL', 'text-test-model')
     monkeypatch.setenv('VISION_API_KEY', 'mock-vision-key')
@@ -85,6 +86,36 @@ def test_vision_disables_thinking_only_on_deepseek(provider, monkeypatch, base_u
 
     assert response.status_code == 200
     assert provider[1].call_args.kwargs.get('extra_body') == expected
+
+
+@pytest.mark.parametrize(('images', 'model'), [([IMAGE], 'deepseek-flash'), ([], 'text-test-model')])
+def test_deepseek_vision_opt_in_preserves_text_model(provider, monkeypatch, images, model):
+    monkeypatch.setenv('ATLAS_DESCRIPTION_USE_DEEPSEEK_VISION', '1')
+    mock_openai, generate = provider
+
+    response = request_draft({'sources': [SOURCE], 'images': images})
+
+    assert response.status_code == 200
+    mock_openai.assert_called_once_with(
+        api_key='mock-text-key', base_url='https://api.deepseek.com', timeout=25, max_retries=0,
+    )
+    options = generate.call_args.kwargs
+    assert options['model'] == model
+    assert options['extra_body'] == {'thinking': {'type': 'disabled'}}
+    if images:
+        prompt = options['messages'][1]['content']
+        assert any(part.get('image_url', {}).get('url') == IMAGE['data_url'] for part in prompt)
+
+
+def test_deepseek_vision_opt_in_requires_deepseek_key(provider, monkeypatch):
+    monkeypatch.setenv('ATLAS_DESCRIPTION_USE_DEEPSEEK_VISION', '1')
+    monkeypatch.delenv('DEEPSEEK_API')
+
+    response = request_draft({'sources': [SOURCE], 'images': [IMAGE]})
+
+    assert response.status_code == 503
+    assert response.json()['detail'] == 'Card description generation from images is not configured.'
+    provider[0].assert_not_called()
 
 
 @pytest.mark.parametrize(('payload', 'status_code'), [
